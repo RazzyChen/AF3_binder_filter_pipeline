@@ -225,28 +225,48 @@ def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
         writer.writerows(materialized)
 
 
+def _read_summary_by_job(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    with path.open(newline="") as handle:
+        return {
+            row["job_name"]: row
+            for row in csv.DictReader(handle)
+            if row.get("job_name")
+        }
+
+
 def aggregate_results(
     *,
     csv_path: Path,
     af_output_dir: Path,
     results_dir: Path = Path("."),
+    score_dir: Path | None = None,
     job_name_template: str = "sample_{sample_no}_{run_name}",
     target_chain: str = "A",
     binder_chain: str = "B",
 ) -> list[dict[str, Any]]:
     rows = read_binder_csv(csv_path)
     best_models_dir = results_dir / "best_models"
+    esm_by_job = _read_summary_by_job(score_dir / "esm_scores_summary.csv") if score_dir else {}
+    ipsae_by_job = _read_summary_by_job(score_dir / "ipsae_scores_summary.csv") if score_dir else {}
     aggregated = [
-        aggregate_one_job(
-            row,
-            job_name_template=job_name_template,
-            af_output_dir=af_output_dir,
-            best_models_dir=best_models_dir,
-            target_chain=target_chain,
-            binder_chain=binder_chain,
-        )
+        {
+            **aggregate_one_job(
+                row,
+                job_name_template=job_name_template,
+                af_output_dir=af_output_dir,
+                best_models_dir=best_models_dir,
+                target_chain=target_chain,
+                binder_chain=binder_chain,
+            )
+        }
         for row in rows
     ]
+    for row in aggregated:
+        job_name = row["job_name"]
+        row.update(esm_by_job.get(job_name, {}))
+        row.update(ipsae_by_job.get(job_name, {}))
 
     write_csv(results_dir / "aggregate_results.csv", aggregated)
 

@@ -18,6 +18,7 @@ from af3_binder_filter.af3_runner import (
 from af3_binder_filter.aggregate import aggregate_results
 from af3_binder_filter.config import PipelineConfig
 from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
+from af3_binder_filter.esm_score import score_esm_inputs
 from af3_binder_filter.gpu import GPUError, query_gpus, select_free_gpus, shard_jobs
 from af3_binder_filter.target_data import TargetDataError, extract_target_features
 
@@ -272,9 +273,30 @@ def run_complex(
 
 
 @app.command("score-esm")
-def score_esm(force: CommonForce = False) -> None:
-    _ = force
-    _not_implemented("score-esm")
+def score_esm(
+    work_dir: CommonWorkDir = Path("work"),
+    output_dir: CommonOutputDir = Path("af_output"),
+    binder_chain: CommonBinderChain = "B",
+    dry_run: CommonDryRun = False,
+    force: CommonForce = False,
+    use_ray: Annotated[bool, typer.Option("--ray/--no-ray", help="Use Ray GPU tasks.")] = True,
+) -> None:
+    config = PipelineConfig(work_dir=work_dir, output_dir=output_dir, binder_chain=binder_chain)
+    input_dir = config.complex_input_dir
+    if not input_dir.exists():
+        _fail(f"complex input directory does not exist: {input_dir}")
+    rows = score_esm_inputs(
+        input_dir=input_dir,
+        af_output_dir=config.output_dir,
+        score_dir=config.score_dir,
+        chain_id=config.binder_chain,
+        config=config.esm,
+        dry_run=dry_run,
+        force=force,
+        use_ray=use_ray,
+    )
+    success = sum(1 for row in rows if row.get("esm_score_status") == "success")
+    console.print(f"ESM scored {len(rows)} jobs ({success} success)")
 
 
 @app.command("score-ipsae")
@@ -294,6 +316,10 @@ def aggregate(
     results_dir: Annotated[Path, typer.Option("--results-dir", help="Directory for result CSVs.")] = Path(
         "."
     ),
+    score_dir: Annotated[
+        Path,
+        typer.Option("--score-dir", help="Directory containing ESM/ipSAE score summary CSVs."),
+    ] = Path("work/scores"),
     job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
@@ -303,6 +329,7 @@ def aggregate(
             csv_path=csv_path,
             af_output_dir=output_dir,
             results_dir=results_dir,
+            score_dir=score_dir,
             job_name_template=job_name_template,
             target_chain=target_chain,
             binder_chain=binder_chain,
