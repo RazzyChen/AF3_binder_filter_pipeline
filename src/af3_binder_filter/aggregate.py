@@ -14,6 +14,7 @@ import numpy as np
 from af3_binder_filter.af3_json import format_job_name
 from af3_binder_filter.csv_input import read_binder_csv
 from af3_binder_filter.models import BinderCsvRow
+from af3_binder_filter.sasa import calculate_sasa_metrics
 
 
 SUMMARY_FIELDS = (
@@ -160,6 +161,7 @@ def aggregate_one_job(
     best_models_dir: Path,
     target_chain: str = "A",
     binder_chain: str = "B",
+    sasa_point_number: int = 1000,
 ) -> dict[str, Any]:
     job_name = format_job_name(row, job_name_template)
     result: dict[str, Any] = {
@@ -194,6 +196,18 @@ def aggregate_one_job(
         result.update(
             _confidence_metrics(confidences, target_chain=target_chain, binder_chain=binder_chain)
         )
+        try:
+            result.update(
+                calculate_sasa_metrics(
+                    paths["model"],
+                    target_chain=target_chain,
+                    binder_chain=binder_chain,
+                    point_number=sasa_point_number,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - keep AF3 aggregation resumable
+            result["sasa_status"] = "error"
+            result["sasa_error"] = str(exc)
         copied_model = _copy_best_model(
             paths["model"],
             best_models_dir,
@@ -245,6 +259,7 @@ def aggregate_results(
     job_name_template: str = "sample_{sample_no}_{run_name}",
     target_chain: str = "A",
     binder_chain: str = "B",
+    sasa_point_number: int = 1000,
 ) -> list[dict[str, Any]]:
     rows = read_binder_csv(csv_path)
     best_models_dir = results_dir / "best_models"
@@ -259,6 +274,7 @@ def aggregate_results(
                 best_models_dir=best_models_dir,
                 target_chain=target_chain,
                 binder_chain=binder_chain,
+                sasa_point_number=sasa_point_number,
             )
         }
         for row in rows

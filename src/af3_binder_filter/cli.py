@@ -386,6 +386,10 @@ def aggregate(
     job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
+    sasa_point_number: Annotated[
+        int,
+        typer.Option("--sasa-point-number", min=1, help="Sphere point count for biotite SASA."),
+    ] = 1000,
 ) -> None:
     try:
         rows = aggregate_results(
@@ -396,6 +400,7 @@ def aggregate(
             job_name_template=job_name_template,
             target_chain=target_chain,
             binder_chain=binder_chain,
+            sasa_point_number=sasa_point_number,
         )
     except Exception as exc:  # noqa: BLE001 - CLI should print a clear error
         _fail(str(exc))
@@ -425,6 +430,10 @@ def pipeline(
         typer.Option("--gpu-ids", help="Comma-separated physical GPU indexes to consider."),
     ] = None,
     use_ray: Annotated[bool, typer.Option("--ray/--no-ray", help="Use Ray for scoring.")] = True,
+    sasa_point_number: Annotated[
+        int,
+        typer.Option("--sasa-point-number", min=1, help="Sphere point count for biotite SASA."),
+    ] = 1000,
 ) -> None:
     config = PipelineConfig(
         csv_path=csv_path,
@@ -535,5 +544,6 @@ def pipeline(
         job_name_template=config.job_name_template,
         target_chain=config.target_chain,
         binder_chain=config.binder_chain,
+        sasa_point_number=sasa_point_number,
     )
     console.print(f"Pipeline complete: aggregated {len(rows)} jobs")

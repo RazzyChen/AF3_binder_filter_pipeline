@@ -129,6 +129,16 @@ class AF3Metrics(BaseModel):
     ipae_A_to_B_min: float | None = None
     ipae_B_to_A_mean: float | None = None
     ipae_B_to_A_min: float | None = None
+    sasa_status: JobState | str | None = None
+    sasa_target_chain: float | None = None
+    sasa_binder_chain: float | None = None
+    sasa_target_free: float | None = None
+    sasa_binder_free: float | None = None
+    dsasa_target: float | None = None
+    dsasa_binder: float | None = None
+    dsasa: float | None = None
+    dsasa_interface: float | None = None
+    sasa_error: str | None = None
 
 
 class ESMScoreMetrics(BaseModel):

@@ -111,3 +111,14 @@ best_models/
 
 ESM and ipSAE scoring write summary CSVs under `work/scores/`, which
 `aggregate` merges when present.
+
+Successful AF3 jobs also receive SASA metrics during aggregation:
+
+- `sasa_target_chain` and `sasa_binder_chain`: chain SASA in the predicted complex
+- `sasa_target_free` and `sasa_binder_free`: isolated-chain SASA
+- `dsasa` / `dsasa_interface`: buried interface SASA, computed as free total minus complex total
+
+SASA uses Biotite and defaults to `--sasa-point-number 1000`.
+
+`modin[ray]` is included in the project dependencies for larger post-processing
+workloads that should use a pandas-compatible API backed by Ray.
