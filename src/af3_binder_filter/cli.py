@@ -20,6 +20,7 @@ from af3_binder_filter.config import PipelineConfig
 from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
 from af3_binder_filter.esm_score import score_esm_inputs
 from af3_binder_filter.gpu import GPUError, query_gpus, select_free_gpus, shard_jobs
+from af3_binder_filter.ipsae_score import score_ipsae_outputs
 from af3_binder_filter.target_data import TargetDataError, extract_target_features
 
 
@@ -301,12 +302,38 @@ def score_esm(
 
 @app.command("score-ipsae")
 def score_ipsae(
+    work_dir: CommonWorkDir = Path("work"),
+    output_dir: CommonOutputDir = Path("af_output"),
     pae_cutoff: Annotated[float, typer.Option("--pae-cutoff", help="PAE cutoff.")] = 10.0,
     dist_cutoff: Annotated[float, typer.Option("--dist-cutoff", help="Distance cutoff.")] = 15.0,
-    force: CommonForce = False,
+    target_chain: CommonTargetChain = "A",
+    binder_chain: CommonBinderChain = "B",
+    use_ray: Annotated[bool, typer.Option("--ray/--no-ray", help="Use Ray CPU tasks.")] = True,
 ) -> None:
-    _ = (pae_cutoff, dist_cutoff, force)
-    _not_implemented("score-ipsae")
+    config = PipelineConfig(
+        work_dir=work_dir,
+        output_dir=output_dir,
+        target_chain=target_chain,
+        binder_chain=binder_chain,
+    )
+    input_dir = config.complex_input_dir
+    if not input_dir.exists():
+        _fail(f"complex input directory does not exist: {input_dir}")
+    try:
+        rows = score_ipsae_outputs(
+            input_dir=input_dir,
+            af_output_dir=config.output_dir,
+            score_dir=config.score_dir,
+            target_chain=config.target_chain,
+            binder_chain=config.binder_chain,
+            pae_cutoff=pae_cutoff,
+            dist_cutoff=dist_cutoff,
+            use_ray=use_ray,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _fail(str(exc))
+    success = sum(1 for row in rows if row.get("ipsae_score_status") == "success")
+    console.print(f"ipSAE scored {len(rows)} jobs ({success} success)")
 
 
 @app.command("aggregate")
