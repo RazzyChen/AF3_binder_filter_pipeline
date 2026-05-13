@@ -21,6 +21,7 @@ from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_tar
 from af3_binder_filter.esm_score import score_esm_inputs
 from af3_binder_filter.gpu import GPUError, query_gpus, select_free_gpus, shard_jobs
 from af3_binder_filter.ipsae_score import score_ipsae_outputs
+from af3_binder_filter.pipeline import expected_target_data_json, run_preflight
 from af3_binder_filter.target_data import TargetDataError, extract_target_features
 
 
@@ -87,6 +88,44 @@ def _parse_gpu_ids(value: str | None) -> list[int] | None:
         raise typer.BadParameter("--gpu-ids must be a comma-separated list of GPU indexes") from exc
 
 
+def _run_af3_input_dir(
+    *,
+    input_dir: Path,
+    config: PipelineConfig,
+    shard_name: str,
+    dry_run: bool,
+    force: bool,
+    gpu_ids: str | None = None,
+) -> None:
+    if not input_dir.exists():
+        _fail(f"AF3 input directory does not exist: {input_dir}")
+    pending = pending_input_jsons(input_dir, config.output_dir, force=force)
+    if not pending:
+        console.print(f"No pending AF3 jobs in {input_dir}.")
+        return
+    try:
+        free_gpus = select_free_gpus(
+            query_gpus(),
+            threshold_mib=config.gpu_busy_threshold_mib,
+            allowed_gpu_ids=_parse_gpu_ids(gpu_ids),
+        )
+        shards = shard_jobs(pending, free_gpus)
+    except GPUError as exc:
+        _fail(str(exc))
+    prepared = prepare_shard_dirs(
+        shards,
+        shard_root=config.work_dir / "shards" / shard_name,
+        output_dir=config.output_dir,
+        config=config.af3,
+    )
+    for shard in prepared:
+        console.print(f"GPU {shard.gpu_index}: {len(shard.jobs)} jobs, input_dir={shard.input_dir}")
+        console.print(" ".join(shard.command))
+    return_code = run_prepared_shards(prepared, dry_run=dry_run)
+    if return_code != 0:
+        _fail(f"one or more AF3 Docker processes failed; worst return code {return_code}")
+
+
 CommonCsv = Annotated[Path, typer.Option("--csv", help="Input binder CSV.")]
 CommonWorkDir = Annotated[Path, typer.Option("--work-dir", help="Pipeline work directory.")]
 CommonOutputDir = Annotated[Path, typer.Option("--output-dir", help="AF3 output directory.")]
@@ -121,10 +160,17 @@ def check(
         job_name_template,
     )
     try:
-        rows = read_binder_csv(config.csv_path)
+        report = run_preflight(config)
     except CsvInputError as exc:
         _fail(str(exc))
-    console.print(f"CSV OK: {config.csv_path} ({len(rows)} jobs)")
+    for line in report.info:
+        console.print(line)
+    for line in report.warnings:
+        console.print(f"[yellow]warning:[/yellow] {line}")
+    if not report.ok:
+        for line in report.errors:
+            console.print(f"[red]error:[/red] {line}")
+        raise typer.Exit(code=1)
 
 
 @app.command("make-target")
@@ -152,8 +198,30 @@ def make_target(
 
 
 @app.command("run-target")
-def run_target() -> None:
-    _not_implemented("run-target")
+def run_target(
+    work_dir: CommonWorkDir = Path("work"),
+    output_dir: CommonOutputDir = Path("af_output"),
+    dry_run: CommonDryRun = False,
+    force: CommonForce = False,
+    gpu_busy_threshold_mib: CommonGpuThreshold = 100,
+    gpu_ids: Annotated[
+        str | None,
+        typer.Option("--gpu-ids", help="Comma-separated physical GPU indexes to consider."),
+    ] = None,
+) -> None:
+    config = PipelineConfig(
+        work_dir=work_dir,
+        output_dir=output_dir,
+        gpu_busy_threshold_mib=gpu_busy_threshold_mib,
+    )
+    _run_af3_input_dir(
+        input_dir=config.target_input_dir,
+        config=config,
+        shard_name="target",
+        dry_run=dry_run,
+        force=force,
+        gpu_ids=gpu_ids,
+    )
 
 
 @app.command("build-complex")
@@ -236,41 +304,14 @@ def run_complex(
         output_dir=output_dir,
         gpu_busy_threshold_mib=gpu_busy_threshold_mib,
     )
-    input_dir = config.complex_input_dir
-    if not input_dir.exists():
-        _fail(f"complex input directory does not exist: {input_dir}")
-
-    pending = pending_input_jsons(input_dir, config.output_dir, force=force)
-    if not pending:
-        console.print("No pending complex jobs.")
-        return
-
-    try:
-        gpus = query_gpus()
-        free_gpus = select_free_gpus(
-            gpus,
-            threshold_mib=config.gpu_busy_threshold_mib,
-            allowed_gpu_ids=_parse_gpu_ids(gpu_ids),
-        )
-        shards = shard_jobs(pending, free_gpus)
-    except GPUError as exc:
-        _fail(str(exc))
-
-    prepared = prepare_shard_dirs(
-        shards,
-        shard_root=config.work_dir / "shards" / "complex",
-        output_dir=config.output_dir,
-        config=config.af3,
+    _run_af3_input_dir(
+        input_dir=config.complex_input_dir,
+        config=config,
+        shard_name="complex",
+        dry_run=dry_run,
+        force=force,
+        gpu_ids=gpu_ids,
     )
-    for shard in prepared:
-        console.print(
-            f"GPU {shard.gpu_index}: {len(shard.jobs)} jobs, input_dir={shard.input_dir}"
-        )
-        console.print(" ".join(shard.command))
-
-    return_code = run_prepared_shards(prepared, dry_run=dry_run)
-    if return_code != 0:
-        _fail(f"one or more AF3 Docker processes failed; worst return code {return_code}")
 
 
 @app.command("score-esm")
@@ -368,6 +409,136 @@ def aggregate(
 
 
 @app.command("pipeline")
-def pipeline(dry_run: CommonDryRun = False, force: CommonForce = False) -> None:
-    _ = (dry_run, force)
-    _not_implemented("pipeline")
+def pipeline(
+    csv_path: CommonCsv = Path("tests/AF3_pipeline_dev_sample.csv"),
+    work_dir: CommonWorkDir = Path("work"),
+    output_dir: CommonOutputDir = Path("af_output"),
+    limit: CommonLimit = None,
+    dry_run: CommonDryRun = False,
+    force: CommonForce = False,
+    target_data_json: Annotated[
+        Path | None,
+        typer.Option("--target-data-json", help="Existing target AF3 *_data.json to reuse."),
+    ] = None,
+    target_name: Annotated[str, typer.Option("--target-name", help="Target AF3 job name.")] = "target_A",
+    job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
+    target_chain: CommonTargetChain = "A",
+    binder_chain: CommonBinderChain = "B",
+    gpu_busy_threshold_mib: CommonGpuThreshold = 100,
+    gpu_ids: Annotated[
+        str | None,
+        typer.Option("--gpu-ids", help="Comma-separated physical GPU indexes to consider."),
+    ] = None,
+    use_ray: Annotated[bool, typer.Option("--ray/--no-ray", help="Use Ray for scoring.")] = True,
+) -> None:
+    config = PipelineConfig(
+        csv_path=csv_path,
+        work_dir=work_dir,
+        output_dir=output_dir,
+        target_chain=target_chain,
+        binder_chain=binder_chain,
+        gpu_busy_threshold_mib=gpu_busy_threshold_mib,
+        job_name_template=job_name_template,
+    )
+
+    report = run_preflight(config)
+    for line in report.info:
+        console.print(line)
+    if not report.ok:
+        for line in report.errors:
+            console.print(f"[red]error:[/red] {line}")
+        raise typer.Exit(code=1)
+
+    try:
+        target_sequence = read_target_sequence(config.csv_path)
+        target_input = write_target_input(
+            target_sequence=target_sequence,
+            output_dir=config.target_input_dir,
+            name=target_name,
+            target_chain=config.target_chain,
+            force=force,
+        )
+        console.print(f"Wrote target input: {target_input}")
+    except (CsvInputError, ValueError) as exc:
+        _fail(str(exc))
+
+    active_target_data = target_data_json
+    if active_target_data is None:
+        _run_af3_input_dir(
+            input_dir=config.target_input_dir,
+            config=config,
+            shard_name="target",
+            dry_run=dry_run,
+            force=force,
+            gpu_ids=gpu_ids,
+        )
+        active_target_data = expected_target_data_json(config, target_name=target_name)
+
+    if dry_run and not active_target_data.exists():
+        console.print(
+            "[yellow]dry-run:[/yellow] target data JSON is not available after target AF3 dry-run; "
+            "stopping before build-complex."
+        )
+        return
+    if not active_target_data.exists():
+        _fail(f"target data JSON does not exist after run-target: {active_target_data}")
+
+    try:
+        rows = read_binder_csv(config.csv_path, limit=limit)
+        target_features = extract_target_features(
+            active_target_data,
+            config.complex_input_dir,
+            chain_id=config.target_chain,
+            force=force,
+        )
+        written = write_complex_inputs(
+            rows,
+            config.complex_input_dir,
+            target_features=target_features,
+            job_name_template=config.job_name_template,
+            target_chain=config.target_chain,
+            binder_chain=config.binder_chain,
+            force=force,
+        )
+        console.print(f"Wrote {len(written)} complex input JSON files to {config.complex_input_dir}")
+    except (CsvInputError, TargetDataError, ValueError) as exc:
+        _fail(str(exc))
+
+    _run_af3_input_dir(
+        input_dir=config.complex_input_dir,
+        config=config,
+        shard_name="complex",
+        dry_run=dry_run,
+        force=force,
+        gpu_ids=gpu_ids,
+    )
+    if dry_run:
+        console.print("[yellow]dry-run:[/yellow] stopping before ESM/ipSAE/aggregate.")
+        return
+
+    score_esm_inputs(
+        input_dir=config.complex_input_dir,
+        af_output_dir=config.output_dir,
+        score_dir=config.score_dir,
+        chain_id=config.binder_chain,
+        config=config.esm,
+        force=force,
+        use_ray=use_ray,
+    )
+    score_ipsae_outputs(
+        input_dir=config.complex_input_dir,
+        af_output_dir=config.output_dir,
+        score_dir=config.score_dir,
+        target_chain=config.target_chain,
+        binder_chain=config.binder_chain,
+        use_ray=use_ray,
+    )
+    rows = aggregate_results(
+        csv_path=config.csv_path,
+        af_output_dir=config.output_dir,
+        score_dir=config.score_dir,
+        job_name_template=config.job_name_template,
+        target_chain=config.target_chain,
+        binder_chain=config.binder_chain,
+    )
+    console.print(f"Pipeline complete: aggregated {len(rows)} jobs")
