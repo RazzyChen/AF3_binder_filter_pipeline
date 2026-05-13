@@ -69,11 +69,6 @@ def _config_from_options(
     )
 
 
-def _not_implemented(command: str) -> None:
-    console.print(f"[yellow]{command}[/yellow] is scaffolded but not implemented yet.")
-    raise typer.Exit(code=2)
-
-
 def _fail(message: str) -> None:
     console.print(f"[red]error:[/red] {message}")
     raise typer.Exit(code=1)
