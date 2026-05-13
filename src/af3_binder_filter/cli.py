@@ -12,6 +12,7 @@ from af3_binder_filter import __version__
 from af3_binder_filter.af3_json import write_complex_inputs, write_target_input
 from af3_binder_filter.config import PipelineConfig
 from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
+from af3_binder_filter.target_data import TargetDataError, extract_target_features
 
 
 app = typer.Typer(
@@ -144,6 +145,20 @@ def build_complex(
     output_dir: CommonOutputDir = Path("af_output"),
     limit: CommonLimit = None,
     force: CommonForce = False,
+    target_data_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--target-data-json",
+            help="Target AF3 *_data.json used to externalize chain A MSA/template features.",
+        ),
+    ] = None,
+    allow_empty_target_features: Annotated[
+        bool,
+        typer.Option(
+            "--allow-empty-target-features",
+            help="Allow complex JSON generation without target MSA/template data.",
+        ),
+    ] = False,
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
     gpu_busy_threshold_mib: CommonGpuThreshold = 100,
@@ -160,9 +175,22 @@ def build_complex(
     )
     try:
         rows = read_binder_csv(config.csv_path, limit=limit)
+        if target_data_json is not None:
+            target_features = extract_target_features(
+                target_data_json,
+                config.complex_input_dir,
+                chain_id=config.target_chain,
+                force=force,
+            )
+        elif allow_empty_target_features:
+            target_features = None
+            console.print("[yellow]warning:[/yellow] building complex inputs without target MSA/templates")
+        else:
+            _fail("--target-data-json is required unless --allow-empty-target-features is set")
         written = write_complex_inputs(
             rows,
             config.complex_input_dir,
+            target_features=target_features,
             job_name_template=config.job_name_template,
             target_chain=config.target_chain,
             binder_chain=config.binder_chain,
