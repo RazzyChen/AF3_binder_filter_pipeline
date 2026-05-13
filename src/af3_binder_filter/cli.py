@@ -15,6 +15,7 @@ from af3_binder_filter.af3_runner import (
     prepare_shard_dirs,
     run_prepared_shards,
 )
+from af3_binder_filter.aggregate import aggregate_results
 from af3_binder_filter.config import PipelineConfig
 from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
 from af3_binder_filter.gpu import GPUError, query_gpus, select_free_gpus, shard_jobs
@@ -287,9 +288,29 @@ def score_ipsae(
 
 
 @app.command("aggregate")
-def aggregate(force: CommonForce = False) -> None:
-    _ = force
-    _not_implemented("aggregate")
+def aggregate(
+    csv_path: CommonCsv = Path("tests/AF3_pipeline_dev_sample.csv"),
+    output_dir: CommonOutputDir = Path("af_output"),
+    results_dir: Annotated[Path, typer.Option("--results-dir", help="Directory for result CSVs.")] = Path(
+        "."
+    ),
+    job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
+    target_chain: CommonTargetChain = "A",
+    binder_chain: CommonBinderChain = "B",
+) -> None:
+    try:
+        rows = aggregate_results(
+            csv_path=csv_path,
+            af_output_dir=output_dir,
+            results_dir=results_dir,
+            job_name_template=job_name_template,
+            target_chain=target_chain,
+            binder_chain=binder_chain,
+        )
+    except Exception as exc:  # noqa: BLE001 - CLI should print a clear error
+        _fail(str(exc))
+    success = sum(1 for row in rows if row.get("job_status") == "success")
+    console.print(f"Aggregated {len(rows)} jobs ({success} success) into {results_dir}")
 
 
 @app.command("pipeline")
