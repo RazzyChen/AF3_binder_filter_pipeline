@@ -105,3 +105,63 @@ class AF3Input(BaseModel):
     name: str
     modelSeeds: list[int] = Field(default_factory=lambda: [42])
     sequences: list[dict[str, ProteinSequence]]
+
+
+class AF3Metrics(BaseModel):
+    """Aggregated AF3 metrics for one job."""
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    job_name: str
+    job_status: JobState | str
+    ranking_score: float | None = None
+    iptm: float | None = None
+    ptm: float | None = None
+    fraction_disordered: float | None = None
+    has_clash: float | None = None
+    plddt_global_mean: float | None = None
+    plddt_global_min: float | None = None
+    plddt_chain_A_mean: float | None = None
+    plddt_chain_A_min: float | None = None
+    plddt_chain_B_mean: float | None = None
+    plddt_chain_B_min: float | None = None
+    ipae_A_to_B_mean: float | None = None
+    ipae_A_to_B_min: float | None = None
+    ipae_B_to_A_mean: float | None = None
+    ipae_B_to_A_min: float | None = None
+
+
+class ESMScoreMetrics(BaseModel):
+    """ESM inverse folding metrics for one job."""
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    job_name: str
+    esm_score_status: JobState | str
+    esm_log_likelihood: float | None = None
+    esm_perplexity: float | None = None
+    esm_fasta_path: Path | str | None = None
+    esm_score_csv: Path | str | None = None
+    esm_error: str | None = None
+
+
+class IPSAEScoreMetrics(BaseModel):
+    """ipSAE-family metrics for one job."""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_name: str
+    ipsae_score_status: JobState | str
+    ipSAE_A_to_B: float | None = None
+    ipSAE_B_to_A: float | None = None
+    ipSAE_max: float | None = None
+    pDockQ_A_to_B: float | None = None
+    pDockQ_B_to_A: float | None = None
+    pDockQ_max: float | None = None
+    pDockQ2_A_to_B: float | None = None
+    pDockQ2_B_to_A: float | None = None
+    pDockQ2_max: float | None = None
+    LIS_A_to_B: float | None = None
+    LIS_B_to_A: float | None = None
+    LIS_max: float | None = None
+    ipsae_error: str | None = None
