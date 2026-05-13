@@ -9,7 +9,9 @@ import typer
 from rich.console import Console
 
 from af3_binder_filter import __version__
+from af3_binder_filter.af3_json import write_complex_inputs, write_target_input
 from af3_binder_filter.config import PipelineConfig
+from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
 
 
 app = typer.Typer(
@@ -61,6 +63,11 @@ def _not_implemented(command: str) -> None:
     raise typer.Exit(code=2)
 
 
+def _fail(message: str) -> None:
+    console.print(f"[red]error:[/red] {message}")
+    raise typer.Exit(code=1)
+
+
 CommonCsv = Annotated[Path, typer.Option("--csv", help="Input binder CSV.")]
 CommonWorkDir = Annotated[Path, typer.Option("--work-dir", help="Pipeline work directory.")]
 CommonOutputDir = Annotated[Path, typer.Option("--output-dir", help="AF3 output directory.")]
@@ -85,7 +92,7 @@ def check(
     gpu_busy_threshold_mib: CommonGpuThreshold = 100,
     job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
 ) -> None:
-    _config_from_options(
+    config = _config_from_options(
         csv_path,
         work_dir,
         output_dir,
@@ -94,12 +101,35 @@ def check(
         gpu_busy_threshold_mib,
         job_name_template,
     )
-    _not_implemented("check")
+    try:
+        rows = read_binder_csv(config.csv_path)
+    except CsvInputError as exc:
+        _fail(str(exc))
+    console.print(f"CSV OK: {config.csv_path} ({len(rows)} jobs)")
 
 
 @app.command("make-target")
-def make_target() -> None:
-    _not_implemented("make-target")
+def make_target(
+    csv_path: CommonCsv = Path("tests/AF3_pipeline_dev_sample.csv"),
+    work_dir: CommonWorkDir = Path("work"),
+    force: CommonForce = False,
+    target_chain: CommonTargetChain = "A",
+    name: Annotated[str, typer.Option("--name", help="Target AF3 job name.")] = "target_A",
+    seed: Annotated[int, typer.Option("--seed", help="AF3 model seed.")] = 42,
+) -> None:
+    try:
+        target_sequence = read_target_sequence(csv_path)
+        output_path = write_target_input(
+            target_sequence=target_sequence,
+            output_dir=work_dir / "target_input",
+            name=name,
+            target_chain=target_chain,
+            seed=seed,
+            force=force,
+        )
+    except (CsvInputError, ValueError) as exc:
+        _fail(str(exc))
+    console.print(f"Wrote target input: {output_path}")
 
 
 @app.command("run-target")
@@ -119,8 +149,7 @@ def build_complex(
     gpu_busy_threshold_mib: CommonGpuThreshold = 100,
     job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
 ) -> None:
-    _ = (limit, force)
-    _config_from_options(
+    config = _config_from_options(
         csv_path,
         work_dir,
         output_dir,
@@ -129,7 +158,19 @@ def build_complex(
         gpu_busy_threshold_mib,
         job_name_template,
     )
-    _not_implemented("build-complex")
+    try:
+        rows = read_binder_csv(config.csv_path, limit=limit)
+        written = write_complex_inputs(
+            rows,
+            config.complex_input_dir,
+            job_name_template=config.job_name_template,
+            target_chain=config.target_chain,
+            binder_chain=config.binder_chain,
+            force=force,
+        )
+    except (CsvInputError, ValueError) as exc:
+        _fail(str(exc))
+    console.print(f"Wrote {len(written)} complex input JSON files to {config.complex_input_dir}")
 
 
 @app.command("run-complex")
