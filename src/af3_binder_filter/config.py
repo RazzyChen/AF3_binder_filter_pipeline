@@ -13,7 +13,7 @@ class AF3DockerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     docker_bin: str = "docker"
-    image: str = "alphafold3"
+    image: str = "alphafold3:latest"
     model_dir: Path = Path("/data/AF3_ckpt")
     database_dir: Path = Path("/data/AF3_database")
     jax_cache_dir: Path = Path("/home/structure/alphafold_jax_cache")

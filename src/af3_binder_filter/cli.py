@@ -10,8 +10,14 @@ from rich.console import Console
 
 from af3_binder_filter import __version__
 from af3_binder_filter.af3_json import write_complex_inputs, write_target_input
+from af3_binder_filter.af3_runner import (
+    pending_input_jsons,
+    prepare_shard_dirs,
+    run_prepared_shards,
+)
 from af3_binder_filter.config import PipelineConfig
 from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
+from af3_binder_filter.gpu import GPUError, query_gpus, select_free_gpus, shard_jobs
 from af3_binder_filter.target_data import TargetDataError, extract_target_features
 
 
@@ -67,6 +73,15 @@ def _not_implemented(command: str) -> None:
 def _fail(message: str) -> None:
     console.print(f"[red]error:[/red] {message}")
     raise typer.Exit(code=1)
+
+
+def _parse_gpu_ids(value: str | None) -> list[int] | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise typer.BadParameter("--gpu-ids must be a comma-separated list of GPU indexes") from exc
 
 
 CommonCsv = Annotated[Path, typer.Option("--csv", help="Input binder CSV.")]
@@ -202,9 +217,57 @@ def build_complex(
 
 
 @app.command("run-complex")
-def run_complex(dry_run: CommonDryRun = False, force: CommonForce = False) -> None:
-    _ = (dry_run, force)
-    _not_implemented("run-complex")
+def run_complex(
+    work_dir: CommonWorkDir = Path("work"),
+    output_dir: CommonOutputDir = Path("af_output"),
+    dry_run: CommonDryRun = False,
+    force: CommonForce = False,
+    gpu_busy_threshold_mib: CommonGpuThreshold = 100,
+    gpu_ids: Annotated[
+        str | None,
+        typer.Option("--gpu-ids", help="Comma-separated physical GPU indexes to consider."),
+    ] = None,
+) -> None:
+    config = PipelineConfig(
+        work_dir=work_dir,
+        output_dir=output_dir,
+        gpu_busy_threshold_mib=gpu_busy_threshold_mib,
+    )
+    input_dir = config.complex_input_dir
+    if not input_dir.exists():
+        _fail(f"complex input directory does not exist: {input_dir}")
+
+    pending = pending_input_jsons(input_dir, config.output_dir, force=force)
+    if not pending:
+        console.print("No pending complex jobs.")
+        return
+
+    try:
+        gpus = query_gpus()
+        free_gpus = select_free_gpus(
+            gpus,
+            threshold_mib=config.gpu_busy_threshold_mib,
+            allowed_gpu_ids=_parse_gpu_ids(gpu_ids),
+        )
+        shards = shard_jobs(pending, free_gpus)
+    except GPUError as exc:
+        _fail(str(exc))
+
+    prepared = prepare_shard_dirs(
+        shards,
+        shard_root=config.work_dir / "shards" / "complex",
+        output_dir=config.output_dir,
+        config=config.af3,
+    )
+    for shard in prepared:
+        console.print(
+            f"GPU {shard.gpu_index}: {len(shard.jobs)} jobs, input_dir={shard.input_dir}"
+        )
+        console.print(" ".join(shard.command))
+
+    return_code = run_prepared_shards(prepared, dry_run=dry_run)
+    if return_code != 0:
+        _fail(f"one or more AF3 Docker processes failed; worst return code {return_code}")
 
 
 @app.command("score-esm")
