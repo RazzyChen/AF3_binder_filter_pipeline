@@ -11,9 +11,12 @@ wheels/
 
 # Local inputs and generated AF3 pipeline outputs
 test/*.csv
+tests/
+goal.md
 inputs/
 work/
 af_output/
 aggregate_results.csv
 input_with_af3_metrics.csv
 best_models/
+*.log
