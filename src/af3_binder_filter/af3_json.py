@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from af3_binder_filter.models import AF3Input, BinderCsvRow, ProteinSequence
+from af3_binder_filter.config import DEFAULT_COMPLEX_JOB_NAME_TEMPLATE
+from af3_binder_filter.models import BinderCsvRow
 
 
 @dataclass(frozen=True)
@@ -42,21 +43,26 @@ def format_job_name(row: BinderCsvRow, template: str) -> str:
 
 def _protein(
     *,
-    chain_id: str,
+    chain_id: str | list[str],
     sequence: str,
     templates: list[dict[str, Any]] | None = None,
     unpaired_msa_path: str | None = None,
     paired_msa_path: str | None = None,
-) -> dict[str, ProteinSequence]:
-    protein = ProteinSequence(
-        id=chain_id,
-        sequence=sequence,
-        templates=templates or [],
-        unpairedMsaPath=unpaired_msa_path,
-        pairedMsaPath=paired_msa_path,
-        unpairedMsa=None if unpaired_msa_path else "",
-        pairedMsa=None if paired_msa_path else "",
-    )
+    include_modifications: bool = True,
+    include_templates: bool = True,
+) -> dict[str, dict[str, Any]]:
+    protein: dict[str, Any] = {
+        "id": chain_id,
+        "sequence": sequence,
+    }
+    if include_modifications:
+        protein["modifications"] = []
+    if include_templates:
+        protein["templates"] = templates or []
+    if unpaired_msa_path:
+        protein["unpairedMsaPath"] = unpaired_msa_path
+    if paired_msa_path:
+        protein["pairedMsaPath"] = paired_msa_path
     return {"protein": protein}
 
 
@@ -66,38 +72,47 @@ def make_target_input(
     target_sequence: str,
     target_chain: str = "A",
     seed: int = 42,
-) -> AF3Input:
-    """Build target-only AF3 input used to obtain target MSA/template data."""
+) -> dict[str, Any]:
+    """Build target-only AF3 input used to obtain target MSA/template data.
 
-    return AF3Input(
-        name=sanitize_job_name(name),
-        modelSeeds=[seed],
-        sequences=[
+    The target pre-run intentionally uses AF3 v1/minimal JSON so AF3 computes
+    MSA/template features for the target chain.
+    """
+
+    return {
+        "name": sanitize_job_name(name),
+        "sequences": [
             _protein(
-                chain_id=target_chain,
+                chain_id=[target_chain],
                 sequence=target_sequence,
-                templates=[],
+                include_modifications=False,
+                include_templates=False,
             )
         ],
-    )
+        "modelSeeds": [seed],
+        "dialect": "alphafold3",
+        "version": 1,
+    }
 
 
 def make_complex_input(
     row: BinderCsvRow,
     *,
     target_features: TargetFeatures | None = None,
-    job_name_template: str = "sample_{sample_no}_{run_name}",
+    job_name_template: str = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
     target_chain: str = "A",
     binder_chain: str = "B",
     seed: int = 42,
-) -> AF3Input:
+) -> dict[str, Any]:
     """Build one binder-target complex AF3 input object."""
 
     features = target_features or TargetFeatures()
-    return AF3Input(
-        name=format_job_name(row, job_name_template),
-        modelSeeds=[seed],
-        sequences=[
+    return {
+        "dialect": "alphafold3",
+        "version": 4,
+        "name": format_job_name(row, job_name_template),
+        "modelSeeds": [seed],
+        "sequences": [
             _protein(
                 chain_id=target_chain,
                 sequence=row.target_seq,
@@ -111,16 +126,16 @@ def make_complex_input(
                 templates=[],
             ),
         ],
-    )
+    }
 
 
-def write_af3_input(payload: AF3Input, output_path: Path, *, force: bool = False) -> Path:
+def write_af3_input(payload: Any, output_path: Path, *, force: bool = False) -> Path:
     """Write one AF3 input object to JSON."""
 
     if output_path.exists() and not force:
         return output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    data = payload.model_dump(mode="json", exclude_none=True)
+    data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
     output_path.write_text(json.dumps(data, indent=2) + "\n")
     return output_path
 
@@ -140,7 +155,7 @@ def write_target_input(
         target_chain=target_chain,
         seed=seed,
     )
-    return write_af3_input(payload, output_dir / f"{payload.name}.json", force=force)
+    return write_af3_input(payload, output_dir / f"{payload['name']}.json", force=force)
 
 
 def write_complex_inputs(
@@ -148,11 +163,12 @@ def write_complex_inputs(
     output_dir: Path,
     *,
     target_features: TargetFeatures | None = None,
-    job_name_template: str = "sample_{sample_no}_{run_name}",
+    job_name_template: str = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
     target_chain: str = "A",
     binder_chain: str = "B",
     seed: int = 42,
     force: bool = False,
+    clean_stale: bool = False,
 ) -> list[Path]:
     """Write one complex JSON per CSV row."""
 
@@ -166,7 +182,12 @@ def write_complex_inputs(
             binder_chain=binder_chain,
             seed=seed,
         )
-        written.append(write_af3_input(payload, output_dir / f"{payload.name}.json", force=force))
+        written.append(write_af3_input(payload, output_dir / f"{payload['name']}.json", force=force))
+    if clean_stale:
+        current_paths = set(written)
+        for old_json in output_dir.glob("*.json"):
+            if old_json not in current_paths:
+                old_json.unlink()
     return written
 
 
@@ -180,7 +201,8 @@ def load_af3_input(path: Path) -> dict[str, Any]:
 def get_chain_sequence(payload: dict[str, Any], chain_id: str) -> str:
     for sequence_entry in payload.get("sequences", []):
         protein = sequence_entry.get("protein", {})
-        if protein.get("id") == chain_id:
+        protein_id = protein.get("id")
+        if protein_id == chain_id or (isinstance(protein_id, list) and chain_id in protein_id):
             return str(protein["sequence"])
     raise KeyError(f"chain {chain_id!r} not found in AF3 input {payload.get('name', '<unknown>')}")
 

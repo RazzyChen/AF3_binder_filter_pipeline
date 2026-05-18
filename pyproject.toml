@@ -1,10 +1,11 @@
 [project]
-name = "af3-binder-filter"
+name = "aerith"
 version = "0.1.0"
-description = "AlphaFold 3 binder-target filtering pipeline"
+description = "AlphaFold 3 binder candidate orchestration pipeline"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "biopython>=1.83",
     "biotite>=1.0",
     "loguru>=0.7",
     "modin[ray]>=0.32",
@@ -17,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-af3-binder-filter = "af3_binder_filter.cli:app"
+aerith = "af3_binder_filter.cli:main"
 
 [dependency-groups]
 dev = [

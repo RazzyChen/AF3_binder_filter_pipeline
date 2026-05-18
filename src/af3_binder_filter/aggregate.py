@@ -1,4 +1,4 @@
-"""Aggregate AF3, ESM, and ipSAE metrics into result CSV files."""
+"""Aggregate AF3, sequence, ESM, ESMFold, ipSAE, and SASA/BSA metrics."""
 
 from __future__ import annotations
 
@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from af3_binder_filter.af3_json import format_job_name
+from af3_binder_filter.config import DEFAULT_COMPLEX_JOB_NAME_TEMPLATE
 from af3_binder_filter.csv_input import read_binder_csv
 from af3_binder_filter.models import BinderCsvRow
 from af3_binder_filter.sasa import calculate_sasa_metrics
+from af3_binder_filter.sequence_metrics import calculate_protein_pi
 
 
 SUMMARY_FIELDS = (
@@ -46,6 +49,13 @@ def _safe_float(value: Any) -> float | None:
         return number
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_plddt(value: Any) -> float | None:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    return number / 100.0 if number > 1.0 else number
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -119,6 +129,8 @@ def _confidence_metrics(confidences: dict[str, Any], *, target_chain: str, binde
         metrics[f"plddt_{label}_mean"] = mean_value
         metrics[f"plddt_{label}_min"] = min_value
 
+    metrics["normalized_plddt_global_mean"] = _normalize_plddt(metrics.get("plddt_global_mean"))
+
     if "pae" in confidences and "token_chain_ids" in confidences:
         pae = np.asarray(confidences["pae"], dtype=float)
         token_chains = np.asarray(confidences["token_chain_ids"])
@@ -162,6 +174,7 @@ def aggregate_one_job(
     target_chain: str = "A",
     binder_chain: str = "B",
     sasa_point_number: int = 1000,
+    design_chain_pi: float | None = None,
 ) -> dict[str, Any]:
     job_name = format_job_name(row, job_name_template)
     result: dict[str, Any] = {
@@ -170,6 +183,7 @@ def aggregate_one_job(
         "job_name": job_name,
         "job_status": "pending",
         "job_error": "",
+        "design_chain_pi": design_chain_pi if design_chain_pi is not None else calculate_protein_pi(row.binder_sequence),
     }
 
     job_dir = af_output_dir / job_name
@@ -239,6 +253,49 @@ def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
         writer.writerows(materialized)
 
 
+def _candidate_passes(row: dict[str, Any]) -> bool:
+    ipae_a_to_b = _safe_float(row.get("ipae_A_to_B_mean"))
+    ipae_b_to_a = _safe_float(row.get("ipae_B_to_A_mean"))
+    iptm = _safe_float(row.get("iptm"))
+    normalized_plddt = _safe_float(row.get("normalized_plddt_global_mean"))
+    esm_log_likelihood = _safe_float(row.get("esm_log_likelihood"))
+    if None in (ipae_a_to_b, ipae_b_to_a, iptm, normalized_plddt, esm_log_likelihood):
+        return False
+
+    ipae_directional_mean = (ipae_a_to_b + ipae_b_to_a) / 2.0
+    try:
+        esm_perplexity = math.exp(-esm_log_likelihood)
+    except OverflowError:
+        return False
+
+    return (
+        ipae_directional_mean <= 1.9
+        and iptm >= 0.80
+        and normalized_plddt >= 0.85
+        and esm_perplexity < 10
+    )
+
+
+def write_candidate_csv(
+    aggregate_csv: Path,
+    candidate_csv: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Write candiate.csv by filtering aggregate_results.csv without changing headers/order."""
+
+    output_path = candidate_csv or aggregate_csv.with_name("candiate.csv")
+    with aggregate_csv.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames or []
+        candidates = [row for row in reader if _candidate_passes(row)]
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(candidates)
+    return candidates
+
+
 def _read_summary_by_job(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
@@ -250,13 +307,23 @@ def _read_summary_by_job(path: Path) -> dict[str, dict[str, Any]]:
         }
 
 
+
+def _progress() -> Progress:
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+
 def aggregate_results(
     *,
     csv_path: Path,
     af_output_dir: Path,
     results_dir: Path = Path("."),
     score_dir: Path | None = None,
-    job_name_template: str = "sample_{sample_no}_{run_name}",
+    job_name_template: str = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
     target_chain: str = "A",
     binder_chain: str = "B",
     sasa_point_number: int = 1000,
@@ -264,27 +331,46 @@ def aggregate_results(
     rows = read_binder_csv(csv_path)
     best_models_dir = results_dir / "best_models"
     esm_by_job = _read_summary_by_job(score_dir / "esm_scores_summary.csv") if score_dir else {}
+    esmfold_by_job = _read_summary_by_job(score_dir / "esmfold_scores_summary.csv") if score_dir else {}
     ipsae_by_job = _read_summary_by_job(score_dir / "ipsae_scores_summary.csv") if score_dir else {}
-    aggregated = [
-        {
-            **aggregate_one_job(
-                row,
-                job_name_template=job_name_template,
-                af_output_dir=af_output_dir,
-                best_models_dir=best_models_dir,
-                target_chain=target_chain,
-                binder_chain=binder_chain,
-                sasa_point_number=sasa_point_number,
-            )
-        }
-        for row in rows
-    ]
-    for row in aggregated:
-        job_name = row["job_name"]
-        row.update(esm_by_job.get(job_name, {}))
-        row.update(ipsae_by_job.get(job_name, {}))
 
-    write_csv(results_dir / "aggregate_results.csv", aggregated)
+    design_chain_pi_values: list[float] = []
+    with _progress() as progress:
+        pi_task = progress.add_task("Calculating design-chain pI", total=len(rows))
+        for row in rows:
+            design_chain_pi_values.append(calculate_protein_pi(row.binder_sequence))
+            progress.advance(pi_task)
+
+    aggregated: list[dict[str, Any]] = []
+    with _progress() as progress:
+        aggregate_task = progress.add_task("Aggregating AF3 + SASA/BSA", total=len(rows))
+        for row, design_chain_pi in zip(rows, design_chain_pi_values, strict=True):
+            aggregated.append(
+                aggregate_one_job(
+                    row,
+                    job_name_template=job_name_template,
+                    af_output_dir=af_output_dir,
+                    best_models_dir=best_models_dir,
+                    target_chain=target_chain,
+                    binder_chain=binder_chain,
+                    sasa_point_number=sasa_point_number,
+                    design_chain_pi=design_chain_pi,
+                )
+            )
+            progress.advance(aggregate_task)
+
+    with _progress() as progress:
+        merge_task = progress.add_task("Merging score summaries", total=len(aggregated))
+        for row in aggregated:
+            job_name = row["job_name"]
+            row.update(esm_by_job.get(job_name, {}))
+            row.update(esmfold_by_job.get(job_name, {}))
+            row.update(ipsae_by_job.get(job_name, {}))
+            progress.advance(merge_task)
+
+    aggregate_csv = results_dir / "aggregate_results.csv"
+    write_csv(aggregate_csv, aggregated)
+    write_candidate_csv(aggregate_csv, results_dir / "candiate.csv")
 
     input_rows = []
     with csv_path.open(newline="") as handle:

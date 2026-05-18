@@ -85,7 +85,7 @@ class ProteinSequence(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    id: str | list[str]
     sequence: str
     modifications: list[dict[str, Any]] = Field(default_factory=list)
     templates: list[dict[str, Any]] = Field(default_factory=list)
@@ -129,15 +129,18 @@ class AF3Metrics(BaseModel):
     ipae_A_to_B_min: float | None = None
     ipae_B_to_A_mean: float | None = None
     ipae_B_to_A_min: float | None = None
+    design_chain_pi: float | None = None
+    esmfold_status: JobState | str | None = None
+    esmfold_plddt_mean: float | None = None
+    esmfold_fasta_path: Path | str | None = None
+    esmfold_pdb_path: Path | str | None = None
+    esmfold_error: str | None = None
     sasa_status: JobState | str | None = None
-    sasa_target_chain: float | None = None
-    sasa_binder_chain: float | None = None
-    sasa_target_free: float | None = None
-    sasa_binder_free: float | None = None
-    dsasa_target: float | None = None
-    dsasa_binder: float | None = None
-    dsasa: float | None = None
-    dsasa_interface: float | None = None
+    sasa_target: float | None = None
+    sasa_binder: float | None = None
+    sasa_complex: float | None = None
+    bsa: float | None = None
+    bsa_interface: float | None = None
     sasa_error: str | None = None
 
 
@@ -153,6 +156,19 @@ class ESMScoreMetrics(BaseModel):
     esm_fasta_path: Path | str | None = None
     esm_score_csv: Path | str | None = None
     esm_error: str | None = None
+
+
+class ESMFoldMetrics(BaseModel):
+    """ESMFold single-chain pLDDT metrics for one job."""
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    job_name: str
+    esmfold_status: JobState | str
+    esmfold_plddt_mean: float | None = None
+    esmfold_fasta_path: Path | str | None = None
+    esmfold_pdb_path: Path | str | None = None
+    esmfold_error: str | None = None
 
 
 class IPSAEScoreMetrics(BaseModel):

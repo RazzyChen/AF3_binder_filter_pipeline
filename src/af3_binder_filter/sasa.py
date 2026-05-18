@@ -50,12 +50,13 @@ def calculate_sasa_metrics(
     binder_chain: str = "B",
     point_number: int = 1000,
 ) -> dict[str, Any]:
-    """Calculate target/binder SASA and buried dSASA from a complex CIF.
+    """Calculate BSA from a complex CIF.
 
-    `sasa_target_chain` and `sasa_binder_chain` are SASA values for each chain in
-    the predicted complex. `sasa_target_free` and `sasa_binder_free` are computed
-    from isolated chain atom arrays. dSASA is the buried interface area:
-    target_free + binder_free - target_complex - binder_complex.
+    `sasa_target` is calculated by deleting the binder chain from the current
+    complex conformation. `sasa_binder` is calculated by deleting the target
+    chain from the current complex conformation. BSA is the buried surface area:
+    sasa_target + sasa_binder - sasa_complex, where `sasa_complex` is calculated
+    from the target and binder chains together.
     """
 
     if point_number <= 0:
@@ -73,31 +74,21 @@ def calculate_sasa_metrics(
     complex_mask = target_mask | binder_mask
 
     complex_array = atom_array[complex_mask]
-    complex_sasa = _sasa_values(complex_array, point_number=point_number)
-    complex_target_mask = complex_array.chain_id == target_chain
-    complex_binder_mask = complex_array.chain_id == binder_chain
-    target_complex = _sum(complex_sasa[complex_target_mask])
-    binder_complex = _sum(complex_sasa[complex_binder_mask])
+    target_array = atom_array[target_mask]
+    binder_array = atom_array[binder_mask]
 
-    target_free = _sum(_sasa_values(atom_array[target_mask], point_number=point_number))
-    binder_free = _sum(_sasa_values(atom_array[binder_mask], point_number=point_number))
-
-    dsasa_target = target_free - target_complex
-    dsasa_binder = binder_free - binder_complex
-    dsasa = dsasa_target + dsasa_binder
+    sasa_complex = _sum(_sasa_values(complex_array, point_number=point_number))
+    sasa_target = _sum(_sasa_values(target_array, point_number=point_number))
+    sasa_binder = _sum(_sasa_values(binder_array, point_number=point_number))
+    bsa = sasa_target + sasa_binder - sasa_complex
 
     return {
         "sasa_status": "success",
         "sasa_error": "",
         "sasa_point_number": point_number,
-        "sasa_target_chain": target_complex,
-        "sasa_binder_chain": binder_complex,
-        "sasa_complex_total": target_complex + binder_complex,
-        "sasa_target_free": target_free,
-        "sasa_binder_free": binder_free,
-        "sasa_free_total": target_free + binder_free,
-        "dsasa_target": dsasa_target,
-        "dsasa_binder": dsasa_binder,
-        "dsasa": dsasa,
-        "dsasa_interface": dsasa,
+        "sasa_target": sasa_target,
+        "sasa_binder": sasa_binder,
+        "sasa_complex": sasa_complex,
+        "bsa": bsa,
+        "bsa_interface": bsa,
     }

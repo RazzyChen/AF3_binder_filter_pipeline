@@ -1,4 +1,4 @@
-"""AF3 binder-target filtering pipeline."""
+"""Aerith: AlphaFold 3 binder candidate orchestration pipeline."""
 
 __all__ = ["__version__"]
 

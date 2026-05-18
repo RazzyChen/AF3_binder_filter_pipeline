@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
+
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from af3_binder_filter.config import AF3DockerConfig
 from af3_binder_filter.gpu import Shard
@@ -25,6 +28,16 @@ class PreparedShard:
     stderr_path: Path
 
 
+
+def _progress() -> Progress:
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+
 def af3_job_name(input_json: Path) -> str:
     data = json.loads(input_json.read_text())
     return str(data.get("name") or input_json.stem)
@@ -40,8 +53,14 @@ def job_successful(job_name: str, output_dir: Path) -> bool:
     return all(path.exists() for path in expected)
 
 
-def pending_input_jsons(input_dir: Path, output_dir: Path, *, force: bool = False) -> list[Path]:
-    jobs = sorted(input_dir.glob("*.json"))
+def pending_input_jsons(
+    input_dir: Path,
+    output_dir: Path,
+    *,
+    force: bool = False,
+    input_jsons: Sequence[Path] | None = None,
+) -> list[Path]:
+    jobs = list(input_jsons) if input_jsons is not None else sorted(input_dir.glob("*.json"))
     if force:
         return jobs
     return [path for path in jobs if not job_successful(af3_job_name(path), output_dir)]
@@ -97,6 +116,24 @@ def build_af3_docker_command(
     ]
 
 
+def _copy_input_assets(source_root: Path, destination_root: Path) -> None:
+    """Copy non-JSON relative input assets used by AF3 JSONs into a shard directory."""
+
+    for child in source_root.iterdir():
+        if child.suffix.lower() == ".json":
+            continue
+        destination = destination_root / child.name
+        if destination.exists():
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+        if child.is_dir():
+            shutil.copytree(child, destination)
+        else:
+            shutil.copy2(child, destination)
+
+
 def prepare_shard_dirs(
     shards: Sequence[Shard],
     *,
@@ -114,6 +151,8 @@ def prepare_shard_dirs(
         input_dir.mkdir(parents=True, exist_ok=True)
         for old_json in input_dir.glob("*.json"):
             old_json.unlink()
+        for source_root in sorted({job.parent for job in shard.jobs}):
+            _copy_input_assets(source_root, input_dir)
         for job in shard.jobs:
             shutil.copy2(job, input_dir / job.name)
         command = build_af3_docker_command(
@@ -150,7 +189,7 @@ def run_prepared_shards(prepared_shards: Sequence[PreparedShard], *, dry_run: bo
     if dry_run:
         return 0
 
-    processes: list[tuple[subprocess.Popen[bytes], object, object]] = []
+    processes: list[tuple[PreparedShard, subprocess.Popen[bytes], object, object]] = []
     for prepared in prepared_shards:
         prepared.stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_handle = prepared.stdout_path.open("wb")
@@ -163,11 +202,23 @@ def run_prepared_shards(prepared_shards: Sequence[PreparedShard], *, dry_run: bo
             stdout=stdout_handle,
             stderr=stderr_handle,
         )
-        processes.append((process, stdout_handle, stderr_handle))
+        processes.append((prepared, process, stdout_handle, stderr_handle))
 
     return_codes: list[int] = []
-    for process, stdout_handle, stderr_handle in processes:
-        return_codes.append(process.wait())
-        stdout_handle.close()
-        stderr_handle.close()
+    with _progress() as progress:
+        task = progress.add_task("Running AF3 Docker shards", total=len(processes))
+        while processes:
+            still_running = []
+            for prepared, process, stdout_handle, stderr_handle in processes:
+                return_code = process.poll()
+                if return_code is None:
+                    still_running.append((prepared, process, stdout_handle, stderr_handle))
+                    continue
+                return_codes.append(return_code)
+                stdout_handle.close()
+                stderr_handle.close()
+                progress.advance(task)
+            processes = still_running
+            if processes:
+                time.sleep(5)
     return max(return_codes, default=0)

@@ -11,7 +11,8 @@ wheels/
 
 # Local inputs and generated AF3 pipeline outputs
 test/*.csv
-tests/
+tests/*
+!tests/*.py
 goal.md
 inputs/
 work/

@@ -427,6 +427,7 @@ def write_ipsae_summary(summary_csv: Path, rows: list[dict[str, Any]]) -> None:
 def score_ipsae_outputs(
     *,
     input_dir: Path,
+    input_jsons: list[Path] | None = None,
     af_output_dir: Path,
     score_dir: Path,
     target_chain: str = "A",
@@ -435,8 +436,11 @@ def score_ipsae_outputs(
     dist_cutoff: float = 15.0,
     use_ray: bool = True,
 ) -> list[dict[str, Any]]:
+    af_output_dir = af_output_dir.resolve()
+    score_dir = score_dir.resolve()
     jobs: list[dict[str, Any]] = []
-    for input_json in sorted(input_dir.glob("*.json")):
+    for input_json in (list(input_jsons) if input_jsons is not None else sorted(input_dir.glob("*.json"))):
+        input_json = input_json.resolve()
         data = json.loads(input_json.read_text())
         job_name = str(data.get("name") or input_json.stem)
         job_dir = af_output_dir / job_name

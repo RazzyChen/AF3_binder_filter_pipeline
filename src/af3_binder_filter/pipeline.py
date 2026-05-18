@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from af3_binder_filter.config import PipelineConfig
 from af3_binder_filter.csv_input import read_binder_csv
-from af3_binder_filter.gpu import GPUError, query_gpus
 
 
 @dataclass
@@ -27,7 +25,7 @@ class PipelineError(RuntimeError):
 
 
 def run_preflight(config: PipelineConfig) -> PreflightReport:
-    """Validate critical inputs and external tools before launching AF3."""
+    """Validate only the CSV input before launching the pipeline."""
 
     report = PreflightReport()
 
@@ -37,35 +35,18 @@ def run_preflight(config: PipelineConfig) -> PreflightReport:
     except Exception as exc:  # noqa: BLE001
         report.errors.append(str(exc))
 
-    for path, label in (
-        (config.af3.model_dir, "AF3 model dir"),
-        (config.af3.database_dir, "AF3 database dir"),
-        (config.af3.jax_cache_dir, "JAX cache dir"),
-        (config.esm.scorer_path, "ESM scorer"),
-    ):
-        if path.exists():
-            report.info.append(f"{label} OK: {path}")
-        else:
-            report.errors.append(f"{label} does not exist: {path}")
-
-    if shutil.which(config.af3.docker_bin):
-        report.info.append(f"Docker OK: {config.af3.docker_bin}")
-    else:
-        report.errors.append(f"Docker executable not found: {config.af3.docker_bin}")
-
-    if shutil.which(config.esm.conda_bin):
-        report.info.append(f"Conda OK: {config.esm.conda_bin}")
-    else:
-        report.errors.append(f"Conda executable not found: {config.esm.conda_bin}")
-
-    try:
-        gpus = query_gpus()
-        report.info.append(f"nvidia-smi OK: {len(gpus)} GPUs visible")
-    except GPUError as exc:
-        report.errors.append(str(exc))
-
     return report
 
 
 def expected_target_data_json(config: PipelineConfig, *, target_name: str = "target_A") -> Path:
-    return config.output_dir / target_name / f"{target_name}_data.json"
+    candidates = candidate_target_data_jsons(config, target_name=target_name)
+    return next((path for path in candidates if path.exists()), candidates[-1])
+
+
+def candidate_target_data_jsons(config: PipelineConfig, *, target_name: str = "target_A") -> list[Path]:
+    """Return supported AF3 target data JSON locations, in preferred order."""
+
+    return [
+        config.output_dir / f"{target_name}_data.json",
+        config.output_dir / target_name / f"{target_name}_data.json",
+    ]

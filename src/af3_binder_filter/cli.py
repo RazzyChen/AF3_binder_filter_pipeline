@@ -1,4 +1,4 @@
-"""Command line interface for the AF3 binder filter pipeline."""
+"""Command line interface for Aerith."""
 
 from __future__ import annotations
 
@@ -16,19 +16,24 @@ from af3_binder_filter.af3_runner import (
     run_prepared_shards,
 )
 from af3_binder_filter.aggregate import aggregate_results
-from af3_binder_filter.config import PipelineConfig
+from af3_binder_filter.config import DEFAULT_COMPLEX_JOB_NAME_TEMPLATE, PipelineConfig
 from af3_binder_filter.csv_input import CsvInputError, read_binder_csv, read_target_sequence
 from af3_binder_filter.esm_score import score_esm_inputs
+from af3_binder_filter.esmfold_score import score_esmfold_inputs
 from af3_binder_filter.gpu import GPUError, query_gpus, select_free_gpus, shard_jobs
 from af3_binder_filter.ipsae_score import score_ipsae_outputs
-from af3_binder_filter.pipeline import expected_target_data_json, run_preflight
+from af3_binder_filter.pipeline import (
+    candidate_target_data_jsons,
+    expected_target_data_json,
+    run_preflight,
+)
 from af3_binder_filter.target_data import TargetDataError, extract_target_features
 
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="AlphaFold 3 binder-target filtering pipeline.",
+    help="Aerith: AlphaFold 3 binder candidate orchestration pipeline.",
 )
 console = Console()
 
@@ -40,13 +45,18 @@ def version_callback(value: bool) -> None:
 
 
 @app.callback()
-def main(
+def _root_callback(
     version: Annotated[
         bool,
         typer.Option("--version", callback=version_callback, help="Show version and exit."),
     ] = False,
 ) -> None:
-    """AF3 binder filter."""
+    """Aerith."""
+
+
+def main() -> None:
+    """Run the Aerith CLI."""
+    app()
 
 
 def _config_from_options(
@@ -91,10 +101,11 @@ def _run_af3_input_dir(
     dry_run: bool,
     force: bool,
     gpu_ids: str | None = None,
+    input_jsons: list[Path] | None = None,
 ) -> None:
     if not input_dir.exists():
         _fail(f"AF3 input directory does not exist: {input_dir}")
-    pending = pending_input_jsons(input_dir, config.output_dir, force=force)
+    pending = pending_input_jsons(input_dir, config.output_dir, force=force, input_jsons=input_jsons)
     if not pending:
         console.print(f"No pending AF3 jobs in {input_dir}.")
         return
@@ -143,7 +154,7 @@ def check(
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
     gpu_busy_threshold_mib: CommonGpuThreshold = 100,
-    job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
+    job_name_template: CommonJobTemplate = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
 ) -> None:
     config = _config_from_options(
         csv_path,
@@ -243,7 +254,7 @@ def build_complex(
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
     gpu_busy_threshold_mib: CommonGpuThreshold = 100,
-    job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
+    job_name_template: CommonJobTemplate = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
 ) -> None:
     config = _config_from_options(
         csv_path,
@@ -276,6 +287,7 @@ def build_complex(
             target_chain=config.target_chain,
             binder_chain=config.binder_chain,
             force=force,
+            clean_stale=True,
         )
     except (CsvInputError, ValueError) as exc:
         _fail(str(exc))
@@ -336,6 +348,42 @@ def score_esm(
     console.print(f"ESM scored {len(rows)} jobs ({success} success)")
 
 
+@app.command("score-esmfold")
+def score_esmfold(
+    work_dir: CommonWorkDir = Path("work"),
+    output_dir: CommonOutputDir = Path("af_output"),
+    binder_chain: CommonBinderChain = "B",
+    dry_run: CommonDryRun = False,
+    force: CommonForce = False,
+    gpu_busy_threshold_mib: CommonGpuThreshold = 100,
+    gpu_ids: Annotated[
+        str | None,
+        typer.Option("--gpu-ids", help="Comma-separated physical GPU indexes to consider."),
+    ] = None,
+) -> None:
+    config = PipelineConfig(
+        work_dir=work_dir,
+        output_dir=output_dir,
+        binder_chain=binder_chain,
+        gpu_busy_threshold_mib=gpu_busy_threshold_mib,
+    )
+    input_dir = config.complex_input_dir
+    if not input_dir.exists():
+        _fail(f"complex input directory does not exist: {input_dir}")
+    rows = score_esmfold_inputs(
+        input_dir=input_dir,
+        score_dir=config.score_dir,
+        chain_id=config.binder_chain,
+        config=config.esmfold,
+        dry_run=dry_run,
+        force=force,
+        gpu_busy_threshold_mib=config.gpu_busy_threshold_mib,
+        gpu_ids=_parse_gpu_ids(gpu_ids),
+    )
+    success = sum(1 for row in rows if row.get("esmfold_status") == "success")
+    console.print(f"ESMFold scored {len(rows)} jobs ({success} success)")
+
+
 @app.command("score-ipsae")
 def score_ipsae(
     work_dir: CommonWorkDir = Path("work"),
@@ -381,9 +429,9 @@ def aggregate(
     ),
     score_dir: Annotated[
         Path,
-        typer.Option("--score-dir", help="Directory containing ESM/ipSAE score summary CSVs."),
+        typer.Option("--score-dir", help="Directory containing ESM/ESMFold/ipSAE score summary CSVs."),
     ] = Path("work/scores"),
-    job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
+    job_name_template: CommonJobTemplate = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
     sasa_point_number: Annotated[
@@ -421,7 +469,7 @@ def pipeline(
         typer.Option("--target-data-json", help="Existing target AF3 *_data.json to reuse."),
     ] = None,
     target_name: Annotated[str, typer.Option("--target-name", help="Target AF3 job name.")] = "target_A",
-    job_name_template: CommonJobTemplate = "sample_{sample_no}_{run_name}",
+    job_name_template: CommonJobTemplate = DEFAULT_COMPLEX_JOB_NAME_TEMPLATE,
     target_chain: CommonTargetChain = "A",
     binder_chain: CommonBinderChain = "B",
     gpu_busy_threshold_mib: CommonGpuThreshold = 100,
@@ -485,7 +533,8 @@ def pipeline(
         )
         return
     if not active_target_data.exists():
-        _fail(f"target data JSON does not exist after run-target: {active_target_data}")
+        candidates = ", ".join(str(path) for path in candidate_target_data_jsons(config, target_name=target_name))
+        _fail(f"target data JSON does not exist after run-target; checked: {candidates}")
 
     try:
         rows = read_binder_csv(config.csv_path, limit=limit)
@@ -503,6 +552,7 @@ def pipeline(
             target_chain=config.target_chain,
             binder_chain=config.binder_chain,
             force=force,
+            clean_stale=True,
         )
         console.print(f"Wrote {len(written)} complex input JSON files to {config.complex_input_dir}")
     except (CsvInputError, TargetDataError, ValueError) as exc:
@@ -515,13 +565,15 @@ def pipeline(
         dry_run=dry_run,
         force=force,
         gpu_ids=gpu_ids,
+        input_jsons=written,
     )
     if dry_run:
-        console.print("[yellow]dry-run:[/yellow] stopping before ESM/ipSAE/aggregate.")
+        console.print("[yellow]dry-run:[/yellow] stopping before ESM/ESMFold/ipSAE/aggregate.")
         return
 
     score_esm_inputs(
         input_dir=config.complex_input_dir,
+        input_jsons=written,
         af_output_dir=config.output_dir,
         score_dir=config.score_dir,
         chain_id=config.binder_chain,
@@ -531,11 +583,22 @@ def pipeline(
     )
     score_ipsae_outputs(
         input_dir=config.complex_input_dir,
+        input_jsons=written,
         af_output_dir=config.output_dir,
         score_dir=config.score_dir,
         target_chain=config.target_chain,
         binder_chain=config.binder_chain,
         use_ray=use_ray,
+    )
+    score_esmfold_inputs(
+        input_dir=config.complex_input_dir,
+        input_jsons=written,
+        score_dir=config.score_dir,
+        chain_id=config.binder_chain,
+        config=config.esmfold,
+        force=force,
+        gpu_busy_threshold_mib=config.gpu_busy_threshold_mib,
+        gpu_ids=_parse_gpu_ids(gpu_ids),
     )
     rows = aggregate_results(
         csv_path=config.csv_path,

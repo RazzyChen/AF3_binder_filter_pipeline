@@ -172,6 +172,7 @@ def write_esm_summary(summary_csv: Path, rows: list[dict[str, Any]]) -> None:
 def score_esm_inputs(
     *,
     input_dir: Path,
+    input_jsons: list[Path] | None = None,
     af_output_dir: Path,
     score_dir: Path,
     chain_id: str,
@@ -182,8 +183,11 @@ def score_esm_inputs(
 ) -> list[dict[str, Any]]:
     """Score all complex input JSONs with top-level AF3 best model CIFs."""
 
+    af_output_dir = af_output_dir.resolve()
+    score_dir = score_dir.resolve()
     jobs: list[dict[str, Any]] = []
-    for input_json in sorted(input_dir.glob("*.json")):
+    for input_json in (list(input_jsons) if input_jsons is not None else sorted(input_dir.glob("*.json"))):
+        input_json = input_json.resolve()
         payload = load_af3_input(input_json)
         job_name = str(payload.get("name") or input_json.stem)
         model_cif = af_output_dir / job_name / f"{job_name}_model.cif"
