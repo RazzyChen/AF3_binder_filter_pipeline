@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local inputs and generated AF3 pipeline outputs
+test/*.csv
+tests/*
+!tests/*.py
+goal.md
+inputs/
+work/
+af_output/
+aggregate_results.csv
+input_with_af3_metrics.csv
+best_models/
+*.log
