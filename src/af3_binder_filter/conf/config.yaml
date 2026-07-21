@@ -1,0 +1,76 @@
+defaults:
+  - backend: alphafold3
+  - secondary_backend: none
+  - features: local_af3_db
+  - interface: biotite_rosetta
+  - clustering: balanced
+  - _self_
+
+project:
+  csv_path: all_seq_PD1_May12.csv
+  work_dir: work
+  output_dir: af_output
+  results_dir: results
+  target_chain: A
+  binder_chain: B
+  job_name_template: sample_{sample_no}_binder_candiate_complex_pred
+  seed: 42
+  run_id: null
+  limit: null
+  prune: false
+  adopt_legacy: false
+  allow_partial: false
+
+runtime:
+  dry_run: false
+  force: false
+  gpu_ids: []
+  gpu_busy_threshold_mib: 100
+  dockerfile: docker/runtime/Dockerfile
+  af3_source_dir: /home/structure/Software/alphafold3-3.0.3
+  protenix_source_dir: /home/structure/Software/Protenix-2.0.0
+  opendde_source_dir: /home/structure/Software/OpenDDE
+  opendde_source_commit: 266ce4c49d492ad1077866000d83704999985f46
+  esm_source_dir: /home/structure/Software/esm
+  esm_source_commit: 2b369911bb5b4b0dda914521b9475cad1656b2ac
+  mmseqs_release: 18-8cc5c
+  mmseqs_version: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f
+  mmseqs_archive_sha256: 83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7
+  foldseek_release: 10-941cd33
+  foldseek_version: 941cd33ff0771cd2e3f144e3293e22a2b87e9fda
+  foldseek_archive_sha256: af7a688ffd8625b356c380380fb5650ec811262a2d18bdb0faeda95cc4894a55
+  minimum_build_free_gib: 45
+  build_proxy: null
+  build_add_host: null
+
+scoring:
+  esm:
+    enabled: true
+    run_on: all
+    inverse_folding: true
+    esmfold: true
+    hard_filter: false
+    runtime_entry_if: esm-if
+    runtime_entry_fold: esmfold
+    model_cache: /home/structure/.cache/torch/hub/checkpoints
+    inverse_folding_checkpoint: esm_if1_gvp4_t16_142M_UR50.pt
+    esmfold_checkpoint: esmfold_3B_v1.pt
+    timeout_seconds: 14400
+
+consensus:
+  anomaly_detection: true
+  anomaly_min_samples: 30
+  robust_z_threshold: 3.5
+  minimum_anomaly_metrics: 2
+  explicit_different_epitope_jaccard: 0.10
+  minimum_contact_residues_for_epitope_flag: 5
+  target_alignment_min_residues: 20
+  target_alignment_min_fraction: 0.70
+  target_alignment_max_iterations: 3
+  same_fold_tm_threshold: 0.50
+  different_pose_rmsd_threshold: 5.0
+  hard_filter: false
+
+hydra:
+  job:
+    chdir: false

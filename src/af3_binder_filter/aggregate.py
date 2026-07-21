@@ -15,6 +15,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, Ti
 from af3_binder_filter.af3_json import format_job_name
 from af3_binder_filter.config import DEFAULT_COMPLEX_JOB_NAME_TEMPLATE
 from af3_binder_filter.csv_input import read_binder_csv
+from af3_binder_filter.io_utils import atomic_write_csv
 from af3_binder_filter.models import BinderCsvRow
 from af3_binder_filter.sasa import calculate_sasa_metrics
 from af3_binder_filter.sequence_metrics import calculate_protein_pi
@@ -119,6 +120,8 @@ def _confidence_metrics(confidences: dict[str, Any], *, target_chain: str, binde
     else:
         plddts = np.asarray([], dtype=float)
         chains = np.asarray([])
+    if plddts.size and float(np.nanmax(plddts)) <= 1.0:
+        plddts = plddts * 100.0
 
     for label, mask in {
         "global": np.ones(plddts.shape, dtype=bool),
@@ -128,6 +131,10 @@ def _confidence_metrics(confidences: dict[str, Any], *, target_chain: str, binde
         mean_value, min_value = _array_stats(plddts[mask])
         metrics[f"plddt_{label}_mean"] = mean_value
         metrics[f"plddt_{label}_min"] = min_value
+    metrics["plddt_target_mean"] = metrics["plddt_chain_A_mean"]
+    metrics["plddt_target_min"] = metrics["plddt_chain_A_min"]
+    metrics["plddt_binder_mean"] = metrics["plddt_chain_B_mean"]
+    metrics["plddt_binder_min"] = metrics["plddt_chain_B_min"]
 
     metrics["normalized_plddt_global_mean"] = _normalize_plddt(metrics.get("plddt_global_mean"))
 
@@ -145,6 +152,10 @@ def _confidence_metrics(confidences: dict[str, Any], *, target_chain: str, binde
         metrics["ipae_A_to_B_min"] = None
         metrics["ipae_B_to_A_mean"] = None
         metrics["ipae_B_to_A_min"] = None
+    metrics["pae_target_to_binder_mean"] = metrics["ipae_A_to_B_mean"]
+    metrics["pae_target_to_binder_min"] = metrics["ipae_A_to_B_min"]
+    metrics["pae_binder_to_target_mean"] = metrics["ipae_B_to_A_mean"]
+    metrics["pae_binder_to_target_min"] = metrics["ipae_B_to_A_min"]
 
     return metrics
 
@@ -181,6 +192,7 @@ def aggregate_one_job(
         "sample_no": row.sample_no,
         "run_name": row.run_name,
         "job_name": job_name,
+        "source_row_number": row.source_row_number,
         "job_status": "pending",
         "job_error": "",
         "design_chain_pi": design_chain_pi if design_chain_pi is not None else calculate_protein_pi(row.binder_sequence),
@@ -241,16 +253,12 @@ def aggregate_one_job(
 
 def write_csv(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     materialized = list(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames: list[str] = []
     for row in materialized:
         for key in row:
             if key not in fieldnames:
                 fieldnames.append(key)
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(materialized)
+    atomic_write_csv(path, materialized, fieldnames=fieldnames)
 
 
 def _candidate_passes(row: dict[str, Any]) -> bool:
@@ -288,11 +296,7 @@ def write_candidate_csv(
         fieldnames = reader.fieldnames or []
         candidates = [row for row in reader if _candidate_passes(row)]
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(candidates)
+    atomic_write_csv(output_path, candidates, fieldnames=fieldnames)
     return candidates
 
 
@@ -370,13 +374,25 @@ def aggregate_results(
 
     aggregate_csv = results_dir / "aggregate_results.csv"
     write_csv(aggregate_csv, aggregated)
-    write_candidate_csv(aggregate_csv, results_dir / "candiate.csv")
+    candidates = write_candidate_csv(aggregate_csv, results_dir / "candidate.csv")
+    # Compatibility for the historical misspelling used by existing consumers.
+    from af3_binder_filter.io_utils import atomic_write_text
 
-    input_rows = []
-    with csv_path.open(newline="") as handle:
-        for raw_row, metrics in zip(csv.DictReader(handle), aggregated, strict=False):
-            if not any((value or "").strip() for value in raw_row.values()):
-                continue
-            input_rows.append({**raw_row, **metrics})
+    atomic_write_text(
+        results_dir / "candiate.csv",
+        (results_dir / "candidate.csv").read_text(encoding="utf-8"),
+    )
+
+    raw_by_row_number: dict[int, dict[str, Any]] = {}
+    with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for raw_row in reader:
+            source_row_number = reader.line_num
+            if any((value or "").strip() for value in raw_row.values()):
+                raw_by_row_number[source_row_number] = raw_row
+    input_rows = [
+        {**raw_by_row_number.get(int(metrics["source_row_number"]), {}), **metrics}
+        for metrics in aggregated
+    ]
     write_csv(results_dir / "input_with_af3_metrics.csv", input_rows)
     return aggregated

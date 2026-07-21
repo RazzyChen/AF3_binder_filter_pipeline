@@ -1,0 +1,9 @@
+name: balanced
+foldseek_binary: foldseek
+binder_tm_threshold: 0.50
+binder_coverage: 0.80
+multimer_tm_threshold: 0.65
+chain_tm_threshold: 0.50
+interface_lddt_threshold: 0.65
+epitope_jaccard_threshold: 0.50
+max_workers: 1

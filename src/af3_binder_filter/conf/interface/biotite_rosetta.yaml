@@ -1,0 +1,21 @@
+name: biotite_rosetta
+geometry_engine: biotite
+energy_engine: rosetta_cli
+distance: 5.0
+epitope_residues: null
+minimum_contact_pairs: 5
+minimum_epitope_coverage: 0.30
+minimum_epitope_purity: null
+sasa_point_number: 1000
+rosetta:
+  binary: /home/structure/Software/rosetta.source.release-408/main/source/bin/InterfaceAnalyzer.mpiserialization.linuxgccrelease
+  database: /home/structure/Software/rosetta.source.release-408/main/database
+  score_function: ref2015
+  interface: A_B
+  pack_input: false
+  pack_separated: true
+  compute_packstat: true
+  constant_seed: true
+  random_seed: 1111111
+  timeout_seconds: 1800
+  max_workers: 8

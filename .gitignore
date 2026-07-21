@@ -17,6 +17,8 @@ goal.md
 inputs/
 work/
 af_output/
+/config.yaml
+/results/
 aggregate_results.csv
 input_with_af3_metrics.csv
 best_models/

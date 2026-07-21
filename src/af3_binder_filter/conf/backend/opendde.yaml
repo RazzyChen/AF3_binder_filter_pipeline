@@ -1,0 +1,17 @@
+name: opendde
+model: opendde_v1
+image: aerith/fold-runtime:local
+image_id: null
+docker_bin: docker
+source_dir: /home/structure/Software/OpenDDE
+source_commit: 266ce4c
+runtime_entry: opendde
+target_data_json: null
+target_name: target_A
+model_dir: /home/structure/Software/OpenDDE
+checkpoint_path: /home/structure/Software/OpenDDE/checkpoint/opendde.pt
+checkpoint_dir: /home/structure/Software/OpenDDE/checkpoint
+common_dir: /home/structure/Software/OpenDDE/common
+metadata_dir: /home/structure/Software/OpenDDE/common
+database_dir: /data/AF3_database
+command: []

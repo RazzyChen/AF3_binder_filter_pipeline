@@ -330,7 +330,7 @@ def calculate_ipsae(
             result[f"{key}_{prefix}"] = value
     for key in ("ipSAE", "ipSAE_d0chn", "ipSAE_d0dom", "ipTM_af", "ipTM_d0chn", "pDockQ", "pDockQ2"):
         result[f"{key}_max"] = max(float(ab[key]), float(ba[key]))
-    result["LIS_max"] = (float(ab["LIS"]) + float(ba["LIS"])) / 2.0
+    result["LIS_max"] = max(float(ab["LIS"]), float(ba["LIS"]))
     return result
 
 

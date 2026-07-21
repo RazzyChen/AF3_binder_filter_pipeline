@@ -1,0 +1,17 @@
+name: protenix
+model: protenix-v2
+image: aerith/fold-runtime:local
+image_id: null
+docker_bin: docker
+source_dir: /home/structure/Software/Protenix-2.0.0
+source_commit: null
+runtime_entry: protenix
+target_data_json: null
+target_name: target_A
+model_dir: /home/structure/checkpoint
+checkpoint_path: /home/structure/checkpoint/protenix-v2.pt
+checkpoint_dir: /home/structure/checkpoint
+common_dir: /home/structure/common
+metadata_dir: /home/structure/Software/OpenDDE/common
+database_dir: /data/AF3_database
+command: []

@@ -1,0 +1,15 @@
+enabled: true
+name: alphafold3
+model: alphafold3
+image: aerith/fold-runtime:local
+image_id: null
+docker_bin: docker
+source_dir: null
+source_commit: null
+runtime_entry: af3
+target_data_json: null
+target_name: target_A
+model_dir: /data/AF3_ckpt
+database_dir: /data/AF3_database
+command: []
+minimum_primary_iptm: 0.70
