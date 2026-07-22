@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from af3_binder_filter.config import DEFAULT_COMPLEX_JOB_NAME_TEMPLATE
+from af3_binder_filter.io_utils import atomic_write_json
 from af3_binder_filter.models import BinderCsvRow
 
 
@@ -134,9 +135,8 @@ def write_af3_input(payload: Any, output_path: Path, *, force: bool = False) -> 
 
     if output_path.exists() and not force:
         return output_path
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
-    output_path.write_text(json.dumps(data, indent=2) + "\n")
+    atomic_write_json(output_path, data)
     return output_path
 
 

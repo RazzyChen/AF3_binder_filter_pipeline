@@ -8,10 +8,24 @@ from pathlib import Path
 from typing import Any
 
 from af3_binder_filter.af3_json import TargetFeatures, sanitize_job_name
+from af3_binder_filter.io_utils import atomic_write_text
 
 
 class TargetDataError(ValueError):
     """Raised when target AF3 data cannot be reused for complex inputs."""
+
+
+def _first_a3m_sequence(path: Path) -> str | None:
+    sequence: list[str] = []
+    seen_header = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(">"):
+            if seen_header:
+                break
+            seen_header = True
+        elif seen_header and line.strip():
+            sequence.append(line.strip())
+    return "".join(sequence).upper() if sequence else None
 
 
 def _protein_for_chain(data: dict[str, Any], chain_id: str) -> dict[str, Any]:
@@ -37,7 +51,7 @@ def _write_text_feature(
 
     if text:
         if force or not output_path.exists():
-            output_path.write_text(text)
+            atomic_write_text(output_path, text)
         return relative_path
 
     if existing_path:
@@ -59,6 +73,7 @@ def extract_target_features(
     *,
     chain_id: str = "A",
     prefix: str | None = None,
+    expected_sequence: str | None = None,
     force: bool = False,
 ) -> TargetFeatures:
     """Externalize target chain MSA/templates next to complex input JSONs."""
@@ -71,6 +86,14 @@ def extract_target_features(
         raise TargetDataError(f"target data JSON must contain one AF3 object: {target_data_json}")
 
     protein = _protein_for_chain(data, chain_id)
+    if expected_sequence is not None:
+        actual_sequence = "".join(str(protein.get("sequence", "")).split()).upper()
+        normalized_expected = "".join(expected_sequence.split()).upper()
+        if actual_sequence != normalized_expected:
+            raise TargetDataError(
+                f"target feature sequence mismatch for chain {chain_id!r}: "
+                f"expected {normalized_expected}, found {actual_sequence or '<missing>'}"
+            )
     feature_prefix = sanitize_job_name(prefix or data.get("name") or target_data_json.stem)
 
     unpaired_path = _write_text_feature(
@@ -89,6 +112,17 @@ def extract_target_features(
         relative_path=f"msas/{feature_prefix}_{chain_id}_paired.a3m",
         force=force,
     )
+    if expected_sequence is not None:
+        normalized_expected = "".join(expected_sequence.split()).upper()
+        for relative_path in (unpaired_path, paired_path):
+            if relative_path is None:
+                continue
+            actual_query = _first_a3m_sequence(output_root / relative_path)
+            if actual_query != normalized_expected:
+                raise TargetDataError(
+                    f"target MSA query mismatch: expected {normalized_expected}, "
+                    f"found {actual_query or '<missing>'} in {relative_path}"
+                )
 
     templates: list[dict[str, Any]] = []
     for index, template in enumerate(protein.get("templates") or []):
@@ -99,7 +133,7 @@ def extract_target_features(
 
         if "mmcif" in template and template["mmcif"]:
             if force or not output_path.exists():
-                output_path.write_text(str(template["mmcif"]))
+                atomic_write_text(output_path, str(template["mmcif"]))
         elif template.get("mmcifPath"):
             source = Path(str(template["mmcifPath"]))
             if not source.is_absolute():

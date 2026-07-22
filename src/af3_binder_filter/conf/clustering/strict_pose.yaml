@@ -1,0 +1,9 @@
+name: strict_pose
+foldseek_binary: foldseek
+binder_tm_threshold: 0.50
+binder_coverage: 0.80
+multimer_tm_threshold: 0.75
+chain_tm_threshold: 0.60
+interface_lddt_threshold: 0.75
+epitope_jaccard_threshold: 0.60
+max_workers: 1

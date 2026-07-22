@@ -183,6 +183,12 @@ def command_record(prepared: PreparedShard) -> ExternalCommand:
     )
 
 
+def combined_return_code(return_codes: Sequence[int]) -> int:
+    """Return zero only when every subprocess exited successfully."""
+
+    return next((code for code in return_codes if code != 0), 0)
+
+
 def run_prepared_shards(prepared_shards: Sequence[PreparedShard], *, dry_run: bool = False) -> int:
     """Run one Docker process per prepared shard and return the worst return code."""
 
@@ -190,35 +196,49 @@ def run_prepared_shards(prepared_shards: Sequence[PreparedShard], *, dry_run: bo
         return 0
 
     processes: list[tuple[PreparedShard, subprocess.Popen[bytes], object, object]] = []
-    for prepared in prepared_shards:
-        prepared.stdout_path.parent.mkdir(parents=True, exist_ok=True)
-        stdout_handle = prepared.stdout_path.open("wb")
-        stderr_handle = prepared.stderr_path.open("wb")
-        stdout_handle.write(f"# started {datetime.now().isoformat()}\n".encode())
-        stderr_handle.write(f"# started {datetime.now().isoformat()}\n".encode())
-        process = subprocess.Popen(
-            prepared.command,
-            shell=False,
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-        )
-        processes.append((prepared, process, stdout_handle, stderr_handle))
+    try:
+        for prepared in prepared_shards:
+            prepared.stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_handle = prepared.stdout_path.open("wb")
+            stderr_handle = prepared.stderr_path.open("wb")
+            stdout_handle.write(f"# started {datetime.now().isoformat()}\n".encode())
+            stderr_handle.write(f"# started {datetime.now().isoformat()}\n".encode())
+            process = subprocess.Popen(
+                prepared.command,
+                shell=False,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+            )
+            processes.append((prepared, process, stdout_handle, stderr_handle))
 
-    return_codes: list[int] = []
-    with _progress() as progress:
-        task = progress.add_task("Running AF3 Docker shards", total=len(processes))
-        while processes:
-            still_running = []
-            for prepared, process, stdout_handle, stderr_handle in processes:
-                return_code = process.poll()
-                if return_code is None:
-                    still_running.append((prepared, process, stdout_handle, stderr_handle))
-                    continue
-                return_codes.append(return_code)
-                stdout_handle.close()
-                stderr_handle.close()
-                progress.advance(task)
-            processes = still_running
-            if processes:
-                time.sleep(5)
-    return max(return_codes, default=0)
+        return_codes: list[int] = []
+        with _progress() as progress:
+            task = progress.add_task("Running AF3 Docker shards", total=len(processes))
+            while processes:
+                still_running = []
+                for prepared, process, stdout_handle, stderr_handle in processes:
+                    return_code = process.poll()
+                    if return_code is None:
+                        still_running.append((prepared, process, stdout_handle, stderr_handle))
+                        continue
+                    return_codes.append(return_code)
+                    stdout_handle.close()
+                    stderr_handle.close()
+                    progress.advance(task)
+                processes = still_running
+                if processes:
+                    time.sleep(5)
+        # The prior max([-9, 0]) implementation reported a false success.
+        return combined_return_code(return_codes)
+    except BaseException:
+        for _prepared, process, _stdout_handle, _stderr_handle in processes:
+            if process.poll() is None:
+                process.terminate()
+        for _prepared, process, stdout_handle, stderr_handle in processes:
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            stdout_handle.close()
+            stderr_handle.close()
+        raise

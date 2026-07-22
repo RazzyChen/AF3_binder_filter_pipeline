@@ -1,0 +1,5 @@
+--- a/setup.py
++++ b/setup.py
+@@ -57 +57 @@
+-    (9, 0), # Hopper
++    (8, 6), # Ampere (RTX 30-series); CUDA 11.6 cannot compile sm_90.
