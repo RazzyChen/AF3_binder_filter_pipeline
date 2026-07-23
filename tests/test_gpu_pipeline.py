@@ -3,17 +3,22 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from af3_binder_filter.backends import UnifiedPrediction, build_backend_command
 from af3_binder_filter.config import AerithConfig
 from af3_binder_filter.esm_tools import load_cached_esm_rows
 from af3_binder_filter.derived_structures import file_sha256
 from af3_binder_filter.gpu import GPUInfo
 from af3_binder_filter.jobs import JobPlan, JobSpec
+from af3_binder_filter.manifest import RunManifest
 from af3_binder_filter.workflow import (
     GpuJobShard,
     RunContext,
     _runtime_gpus,
     _run_sharded_commands,
+    clustering_stage,
+    esm_stage,
     plan_gpu_job_shards,
 )
 
@@ -41,6 +46,8 @@ def _gpu(index: int) -> GPUInfo:
 def _context(tmp_path: Path, jobs: tuple[JobSpec, ...]) -> RunContext:
     config = AerithConfig()
     config.project.results_dir = str(tmp_path)
+    config.project.work_dir = str(tmp_path / "work")
+    config.project.output_dir = str(tmp_path / "outputs")
     plan = JobPlan(jobs, "LMNP", tmp_path / "input.csv", len(jobs))
     return RunContext(
         config=config,
@@ -50,6 +57,18 @@ def _context(tmp_path: Path, jobs: tuple[JobSpec, ...]) -> RunContext:
         run_id="run-test",
         results_dir=tmp_path,
         manifest_path=tmp_path / "manifest.json",
+    )
+
+
+def _manifest(context: RunContext) -> RunManifest:
+    return RunManifest(
+        run_id=context.run_id,
+        fingerprint=context.fingerprint,
+        backend=context.config.backend.name,
+        model=context.config.backend.model,
+        source_csv=str(context.plan.source_csv),
+        target_sequence_sha256="target",
+        job_fingerprints={job.job_id: "fingerprint" for job in context.plan.jobs},
     )
 
 
@@ -164,6 +183,107 @@ def test_backend_container_has_unique_name_and_one_visible_gpu(
     assert command[command.index("--name") + 1] == "aerith-run-primary-gpu2"
     assert command[command.index("--gpus") + 1] == "device=2"
     assert "--gpu_device=0" in command
+
+
+def test_clustering_stage_forwards_effective_rows_to_foldseek_staging(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    job = _job(0)
+    context = _context(tmp_path, (job,))
+    model = tmp_path / "effective.cif"
+    model.write_text("model")
+    prediction = UnifiedPrediction(
+        job.job_id,
+        "opendde",
+        "success",
+        best_model_path=model,
+    )
+    effective_rows = ({"job_name": job.job_id, "effective_backend": "opendde"},)
+
+    class WiringObserved(RuntimeError):
+        pass
+
+    def capture(_jobs, _paths, *, work_dir, rows):
+        assert work_dir.is_dir()
+        assert rows is effective_rows
+        raise WiringObserved
+
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.prepare_foldseek_inputs",
+        capture,
+    )
+    with pytest.raises(WiringObserved):
+        clustering_stage(
+            context,
+            (prediction,),
+            effective_rows,
+        )
+
+
+def test_esm_stage_forwards_effective_rows_to_all_cache_and_input_helpers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    job = _job(0)
+    context = _context(tmp_path, (job,))
+    context.config.scoring.esm.enabled = True
+    context.config.scoring.esm.esmfold = False
+    context.config.scoring.esm.inverse_folding = False
+    model = tmp_path / "effective.cif"
+    model.write_text("model")
+    prediction = UnifiedPrediction(
+        job.job_id,
+        "opendde",
+        "success",
+        best_model_path=model,
+    )
+    effective_rows = ({"job_name": job.job_id, "effective_backend": "opendde"},)
+    seen: dict[str, object] = {}
+
+    def cache_loader(*_args, **kwargs):
+        seen["cache_rows"] = kwargs["structure_rows"]
+        seen["cache_primary"] = kwargs["primary_predictions"]
+        seen["cache_secondary"] = kwargs["secondary_predictions"]
+        return None
+
+    def input_writer(_jobs, _predictions, _directory, **kwargs):
+        seen.setdefault("input_rows", []).append(kwargs["structure_rows"])
+        return tmp_path / "binders.fasta", tmp_path / "esm_if_jobs.json"
+
+    def collector(_jobs, _predictions, _directory, **kwargs):
+        seen["collect_rows"] = kwargs["structure_rows"]
+        return [{"job_name": job.job_id, "esm_status": "disabled"}]
+
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.load_cached_esm_rows",
+        cache_loader,
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.write_esm_inputs",
+        input_writer,
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.collect_esm_rows",
+        collector,
+    )
+
+    rows, failed = esm_stage(
+        context,
+        (prediction,),
+        _manifest(context),
+        primary_predictions=(prediction,),
+        secondary_predictions=(prediction,),
+        structure_rows=effective_rows,
+    )
+
+    assert failed is False
+    assert rows[0]["job_name"] == job.job_id
+    assert seen["cache_rows"] is effective_rows
+    assert seen["cache_primary"] == (prediction,)
+    assert seen["cache_secondary"] == (prediction,)
+    assert seen["input_rows"] == [effective_rows]
+    assert seen["collect_rows"] is effective_rows
 
 
 def test_esm_cache_requires_complete_parseable_outputs(tmp_path: Path) -> None:

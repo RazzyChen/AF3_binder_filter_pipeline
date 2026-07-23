@@ -11,11 +11,15 @@ import numpy as np
 import pytest
 
 from af3_binder_filter.backends import UnifiedPrediction
-from af3_binder_filter.clustering import prepare_foldseek_inputs
+from af3_binder_filter.clustering import ClusteringError, prepare_foldseek_inputs
 from af3_binder_filter.config import ConsensusSettings
-from af3_binder_filter.consensus import structure_consensus_metrics_from_rows
+from af3_binder_filter.consensus import (
+    consensus_rows,
+    structure_consensus_metrics_from_rows,
+)
 from af3_binder_filter.derived_structures import (
     DERIVED_STRUCTURE_SCHEMA,
+    DerivedStructureValidationError,
     file_sha256,
     validate_derived_manifest,
     validated_artifacts_from_row,
@@ -221,6 +225,30 @@ def test_foldseek_staging_reuses_validated_normalized_structures(
     assert file_sha256(staged_complex) == file_sha256(
         Path(str(interface_row["normalized_complex_pdb_path"]))
     )
+
+
+def test_foldseek_rejects_a_declared_derivative_that_no_longer_validates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model, interface_row = _derive(tmp_path)
+    effective = _effective_row(interface_row, model)
+    Path(str(interface_row["normalized_binder_pdb_path"])).write_text("corrupt\n")
+
+    def fail_raw_parse(*_args, **_kwargs):
+        raise AssertionError("a declared derivative must not raw-fallback")
+
+    monkeypatch.setattr(
+        "af3_binder_filter.clustering.load_protein_complex",
+        fail_raw_parse,
+    )
+    with pytest.raises(ClusteringError, match="no longer validates"):
+        prepare_foldseek_inputs(
+            (_job(),),
+            {"job": model},
+            work_dir=tmp_path / "foldseek_corrupt",
+            rows=(effective,),
+        )
 
 
 def test_esm_uses_staged_derived_binder_for_if_and_fold_comparison(
@@ -885,6 +913,28 @@ def test_consensus_uses_validated_coordinate_npz_and_falls_back_safely(
     assert calls == []
 
     secondary["effective_derived_structure_id"] = "invalid"
+    with pytest.raises(
+        DerivedStructureValidationError,
+        match="effective derived structure no longer validates",
+    ):
+        structure_consensus_metrics_from_rows(
+            primary,
+            secondary,
+            target_chain="A",
+            binder_chain="B",
+            primary_target_contacts=contacts,
+            secondary_target_contacts=contacts,
+            primary_binder_contacts=contacts,
+            secondary_binder_contacts=contacts,
+            settings=settings,
+            primary_prefix="effective",
+            secondary_prefix="effective",
+        )
+    assert calls == []
+
+    # A derivative that was never successfully published remains eligible for
+    # the explicit raw-model compatibility path.
+    secondary["effective_derived_structure_status"] = "error"
     fallback = structure_consensus_metrics_from_rows(
         primary,
         secondary,
@@ -900,3 +950,61 @@ def test_consensus_uses_validated_coordinate_npz_and_falls_back_safely(
     )
     assert fallback["consensus_coordinate_source"] == "raw_structure_fallback"
     assert calls == [primary_model, secondary_model]
+
+
+def test_consensus_rows_consumes_validated_derivatives_without_raw_reparse(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    primary_model, primary_interface = _derive(
+        tmp_path / "primary_rows",
+        backend="alphafold3",
+    )
+    secondary_model, secondary_interface = _derive(
+        tmp_path / "secondary_rows",
+        backend="opendde",
+        binder_shift=1.0,
+    )
+    common = {
+        "job_name": "job",
+        "job_status": "success",
+        "target_chain": "A",
+        "binder_chain": "B",
+        "target_sequence": "AAA",
+        "binder_sequence": "AAA",
+    }
+    primary = {
+        **common,
+        "backend": "alphafold3",
+        "best_model_path": str(primary_model),
+        **primary_interface,
+    }
+    secondary = {
+        **common,
+        "backend": "opendde",
+        "best_model_path": str(secondary_model),
+        **secondary_interface,
+    }
+
+    def fail_raw_parse(*_args, **_kwargs):
+        raise AssertionError("consensus_rows must consume coordinate NPZ artifacts")
+
+    monkeypatch.setattr(
+        "af3_binder_filter.consensus.load_protein_complex",
+        fail_raw_parse,
+    )
+    result = consensus_rows(
+        (primary,),
+        (secondary,),
+        ConsensusSettings(
+            target_alignment_min_residues=3,
+            target_alignment_min_fraction=1.0,
+        ),
+    )
+
+    assert result[0]["consensus_status"] == "success", result[0].get(
+        "consensus_error"
+    )
+    assert result[0]["consensus_coordinate_source"] == "derived_cache"
+    assert result[0]["primary_derived_structure_status"] == "success"
+    assert result[0]["secondary_derived_structure_status"] == "success"

@@ -103,6 +103,10 @@ class SourceModelChangedError(RuntimeError):
         )
 
 
+class DerivedStructureValidationError(RuntimeError):
+    """Raised when a row advertises a derivative that no longer validates."""
+
+
 @dataclass(frozen=True, slots=True)
 class DerivedStructureArtifacts:
     content_id: str
@@ -714,13 +718,32 @@ def validated_artifacts_from_row(
     row: Mapping[str, Any],
     *,
     prefix: str = "effective",
+    require_declared: bool = False,
 ) -> DerivedStructureArtifacts | None:
-    """Strictly bind a selected row to its current derivative manifest."""
+    """Strictly bind a selected row to its current derivative manifest.
+
+    A missing derivative is a supported slow-path for rows whose derivative
+    stage never succeeded. Once a row declares ``*_derived_structure_status``
+    as successful, callers may set ``require_declared`` to prevent a corrupt,
+    replaced, or partially deleted bundle from silently falling back to the
+    raw source model.
+    """
+
+    def invalid() -> None:
+        if require_declared and str(
+            _row_value(row, prefix, "derived_structure_status") or ""
+        ) == "success":
+            job_id = row_job_identifier(row) or "<unknown>"
+            label = prefix or "backend"
+            raise DerivedStructureValidationError(
+                f"{label} derived structure no longer validates for {job_id}"
+            )
+        return None
 
     try:
         job_id = row_job_identifier(row)
         if job_id is None:
-            return None
+            return invalid()
         backend = str(_row_value(row, prefix, "backend") or "")
         target_chain = str(row.get("target_chain") or "")
         binder_chain = str(row.get("binder_chain") or "")
@@ -749,7 +772,7 @@ def validated_artifacts_from_row(
                 source_sha,
             )
         ) or distance in (None, ""):
-            return None
+            return invalid()
         target_positions = _strict_row_positions(
             _row_value(row, prefix, "target_interface_residues"),
             target_chain,
@@ -762,7 +785,7 @@ def validated_artifacts_from_row(
         if source_path_value not in (None, ""):
             source_path = Path(str(source_path_value))
             if not source_path.is_file() or file_sha256(source_path) != source_sha:
-                return None
+                return invalid()
         artifacts = validate_derived_manifest(
             Path(str(manifest_value)),
             content_id=content_id,
@@ -778,7 +801,7 @@ def validated_artifacts_from_row(
             binder_interface_positions=binder_positions,
         )
         if artifacts is None:
-            return None
+            return invalid()
         expected_paths = {
             "normalized_complex_pdb_path": artifacts.complex_pdb,
             "normalized_target_pdb_path": artifacts.target_pdb,
@@ -789,10 +812,10 @@ def validated_artifacts_from_row(
         for name, expected in expected_paths.items():
             supplied = _row_value(row, prefix, name)
             if supplied in (None, "") or Path(str(supplied)).resolve() != expected.resolve():
-                return None
+                return invalid()
         return artifacts
     except (OSError, ValueError, TypeError, UnicodeError):
-        return None
+        return invalid()
 
 
 def _atomic_save_structure(path: Path, array: Any) -> None:

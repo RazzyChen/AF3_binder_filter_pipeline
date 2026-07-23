@@ -141,7 +141,15 @@ def _structure_context_by_job(
         job_id = row_job_identifier(row)
         if job_id is None:
             continue
-        artifacts = validated_artifacts_from_row(row, prefix=prefix)
+        if prefix and f"{prefix}_derived_structure_status" not in row:
+            # A merged row's unprefixed fields describe the primary backend.
+            # Never reinterpret them as an absent secondary/effective backend.
+            continue
+        artifacts = validated_artifacts_from_row(
+            row,
+            prefix=prefix,
+            require_declared=True,
+        )
         if job_id and artifacts is not None:
             derived[job_id] = artifacts
             bindings[job_id] = _ESMStructureBinding(

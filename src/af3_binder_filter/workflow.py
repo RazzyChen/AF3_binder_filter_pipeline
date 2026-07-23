@@ -49,6 +49,10 @@ from af3_binder_filter.features import (
     feature_bundle_content_sha256,
     prepare_target_features,
 )
+from af3_binder_filter.derived_structures import (
+    DerivedStructureValidationError,
+    validated_artifacts_from_row,
+)
 from af3_binder_filter.interface import (
     analyze_interface_geometry,
     apply_balanced_shortlist,
@@ -1891,6 +1895,7 @@ def clustering_stage(
         active_jobs,
         model_paths,
         work_dir=work_dir,
+        rows=rows,
     )
     stage_layout = context.layout.stage("clustering")
     foldseek_root = stage_layout.artifacts / "foldseek"
@@ -2049,6 +2054,7 @@ def esm_stage(
     *,
     primary_predictions: Sequence[UnifiedPrediction] = (),
     secondary_predictions: Sequence[UnifiedPrediction] = (),
+    structure_rows: Sequence[dict[str, Any]] = (),
     reporter: PipelineProgressReporter | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Run ESMFold and score each sequence on its effective backbone."""
@@ -2068,6 +2074,9 @@ def esm_stage(
             predictions,
             require_esmfold=context.config.scoring.esm.esmfold,
             require_inverse_folding=context.config.scoring.esm.inverse_folding,
+            structure_rows=structure_rows,
+            primary_predictions=primary_predictions,
+            secondary_predictions=secondary_predictions,
         )
     cache_hits = len(context.plan.jobs) if cached_rows is not None else 0
     reporter.cache_status(
@@ -2122,7 +2131,12 @@ def esm_stage(
                 detail=detail,
             )
         return cached_rows, False
-    write_esm_inputs(context.plan.jobs, predictions, input_dir)
+    write_esm_inputs(
+        context.plan.jobs,
+        predictions,
+        input_dir,
+        structure_rows=structure_rows,
+    )
     failed = False
 
     def shard_commands(
@@ -2163,7 +2177,12 @@ def esm_stage(
                 / f"gpu_{shard.gpu.index}"
             )
             shard_output.mkdir(parents=True, exist_ok=True)
-            write_esm_inputs(shard.jobs, predictions, shard_input)
+            write_esm_inputs(
+                shard.jobs,
+                predictions,
+                shard_input,
+                structure_rows=structure_rows,
+            )
             if tool_name == "esmfold":
                 command = build_esmfold_container_command(
                     context.config,
@@ -2247,6 +2266,7 @@ def esm_stage(
             context.plan.jobs,
             predictions,
             output_dir,
+            structure_rows=structure_rows,
         )
         fold_success = sum(
             row.get("esmfold_status") == "success" for row in fold_rows
@@ -2353,6 +2373,7 @@ def esm_stage(
         predictions,
         output_dir,
         comparison_label="effective",
+        structure_rows=structure_rows,
     )
     if primary_predictions:
         rows = add_esmfold_backend_comparison(
@@ -2361,6 +2382,7 @@ def esm_stage(
             primary_predictions,
             output_dir,
             label="primary",
+            structure_rows=structure_rows,
         )
     if secondary_predictions:
         rows = add_esmfold_backend_comparison(
@@ -2369,6 +2391,7 @@ def esm_stage(
             secondary_predictions,
             output_dir,
             label="secondary",
+            structure_rows=structure_rows,
         )
     if context.config.scoring.esm.esmfold:
         failed |= any(row.get("esmfold_status") != "success" for row in rows)
@@ -3112,6 +3135,7 @@ def run_pipeline(
                 manifest,
                 primary_predictions=primary_predictions,
                 secondary_predictions=secondary_predictions,
+                structure_rows=final_rows,
                 reporter=reporter,
             )
             manifest.stage_status["esm"] = (
@@ -3123,6 +3147,7 @@ def run_pipeline(
                 context,
                 effective_predictions,
                 manifest,
+                structure_rows=final_rows,
             )
             manifest.stage_status["esm"] = "disabled"
         final_rows = _merge_rows_by_job(final_rows, esm_rows)
@@ -3588,6 +3613,14 @@ def _validated_clustering_inputs(
             raise PipelineExecutionError(
                 f"candidate {job_id} has no manifest-bound effective model"
             )
+        try:
+            validated_artifacts_from_row(
+                candidate,
+                prefix="effective",
+                require_declared=True,
+            )
+        except DerivedStructureValidationError as exc:
+            raise PipelineExecutionError(str(exc)) from exc
     return all_rows, candidate_rows
 
 

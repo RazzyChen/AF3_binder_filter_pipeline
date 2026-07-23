@@ -317,10 +317,12 @@ def structure_consensus_metrics_from_rows(
     primary_artifacts = validated_artifacts_from_row(
         primary_row,
         prefix=primary_prefix,
+        require_declared=True,
     )
     secondary_artifacts = validated_artifacts_from_row(
         secondary_row,
         prefix=secondary_prefix,
+        require_declared=True,
     )
     if primary_artifacts is not None and secondary_artifacts is not None:
         return _consensus_from_coordinate_maps(
@@ -520,12 +522,12 @@ def consensus_rows(
         job_name = str(primary["job_name"])
         secondary = secondary_by_job.get(job_name)
         row = dict(primary)
+        for key, value in primary.items():
+            row[f"primary_{key}"] = value
         if secondary is None:
             row.update({"secondary_status": "not_selected", "consensus_status": "not_available"})
             merged.append(row)
             continue
-        for key, value in primary.items():
-            row[f"primary_{key}"] = value
         for key, value in secondary.items():
             row[f"secondary_{key}"] = value
         row["secondary_backend"] = secondary.get("backend")
@@ -540,9 +542,9 @@ def consensus_rows(
             _pair_set(secondary.get("interface_residue_pairs")),
         )
         try:
-            metrics = structure_consensus_metrics(
-                Path(str(primary["best_model_path"])),
-                Path(str(secondary["best_model_path"])),
+            metrics = structure_consensus_metrics_from_rows(
+                primary,
+                secondary,
                 target_chain=str(primary["target_chain"]),
                 binder_chain=str(primary["binder_chain"]),
                 primary_target_contacts=primary_contacts,

@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from af3_binder_filter.config import ClusteringSettings
 from af3_binder_filter.derived_structures import (
+    DerivedStructureValidationError,
     row_job_identifier,
     row_structure_is_eligible,
     validated_artifacts_from_row,
@@ -181,10 +182,14 @@ def prepare_foldseek_inputs(
             continue
         destination = complex_dir / f"{job.job_id}.pdb"
         binder_destination = binder_dir / f"{job.job_id}.pdb"
-        derived = validated_artifacts_from_row(
-            source_row or {},
-            prefix="effective",
-        )
+        try:
+            derived = validated_artifacts_from_row(
+                source_row or {},
+                prefix="effective",
+                require_declared=True,
+            )
+        except DerivedStructureValidationError as exc:
+            raise ClusteringError(str(exc)) from exc
         if derived is not None:
             # Both files were written from the interface stage's single parse
             # and checksum-validated together.  Staging is now file I/O only.
