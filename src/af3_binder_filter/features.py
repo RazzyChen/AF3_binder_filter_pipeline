@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
@@ -28,6 +30,19 @@ FEATURE_MANIFEST_VERSION = 3
 
 class FeatureError(RuntimeError):
     """Raised when offline feature preparation is incomplete or inconsistent."""
+
+
+@contextmanager
+def _feature_cache_lock(cache_dir: Path):
+    """Serialize expensive feature publication for one target cache key."""
+
+    lock_path = cache_dir / ".prepare.lock"
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _artifact_sha256(path: Path) -> str:
@@ -400,6 +415,7 @@ def prepare_target_features(
     database_identity: dict[str, object] | None = None,
     container_name: str | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    _lock_acquired: bool = False,
 ) -> FeaturePreparation:
     selected_database_identity = (
         database_identity
@@ -420,6 +436,23 @@ def prepare_target_features(
         database_identity=selected_database_identity,
     )
     bundle.cache_dir.mkdir(parents=True, exist_ok=True)
+    if not dry_run and not _lock_acquired:
+        with _feature_cache_lock(bundle.cache_dir):
+            # A concurrent run may have published the exact same feature set
+            # while this process waited. Re-enter once under the lock so the
+            # cache is validated again before spending GPU time.
+            return prepare_target_features(
+                settings,
+                target_sequence,
+                dry_run=dry_run,
+                force=force,
+                gpu_index=gpu_index,
+                log_dir=log_dir,
+                database_identity=selected_database_identity,
+                container_name=container_name,
+                runner=runner,
+                _lock_acquired=True,
+            )
     if dry_run:
         command, _query_fasta = build_feature_builder_command(
             settings,

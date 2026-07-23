@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import runpy
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -263,6 +266,51 @@ def test_feature_preparation_publishes_complete_cache_atomically(
     )
 
     assert cached_target_features(settings, "ACDE") is None
+
+
+def test_concurrent_feature_requests_share_one_locked_gpu_build(
+    tmp_path: Path,
+) -> None:
+    settings = FeatureSettings(
+        database_dir=str(tmp_path / "db"),
+        cache_dir=str(tmp_path / "cache"),
+    )
+    (tmp_path / "db").mkdir()
+    runner_calls = 0
+    runner_lock = threading.Lock()
+
+    def runner(command, **_kwargs):
+        nonlocal runner_calls
+        with runner_lock:
+            runner_calls += 1
+        time.sleep(0.05)
+        output_mount = next(
+            value for value in command if value.endswith(":/output")
+        )
+        output = Path(output_mount.removesuffix(":/output"))
+        for name in ("pairing.a3m", "non_pairing.a3m", "hmmsearch.a3m"):
+            (output / name).write_text(">query\nACDE\n")
+        (output / "templates").mkdir()
+        (output / "af3_templates.json").write_text(
+            json.dumps({"version": 1, "templates": []})
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        preparations = list(
+            pool.map(
+                lambda _index: prepare_target_features(
+                    settings,
+                    "ACDE",
+                    runner=runner,
+                ),
+                range(2),
+            )
+        )
+
+    assert runner_calls == 1
+    assert sorted(preparation.reused for preparation in preparations) == [False, True]
+    assert all(preparation.bundle is not None for preparation in preparations)
 
 
 def test_feature_preparation_failure_does_not_publish_manifest(
