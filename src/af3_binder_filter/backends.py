@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import os
 import re
 import shutil
 import subprocess
+import tempfile
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, Sequence
@@ -24,6 +27,27 @@ from af3_binder_filter.jobs import JobSpec
 
 class BackendError(RuntimeError):
     """Raised for an invalid backend contract or an unparseable prediction."""
+
+
+RUNTIME_SOURCE_CONTEXTS = (
+    "af3-src",
+    "protenix-src",
+    "opendde-src",
+    "esm-src",
+)
+RUNTIME_SOURCE_BUNDLE_SCHEMA = "aerith.runtime-source-bundle.v1"
+RUNTIME_SOURCE_BUNDLE_MANIFEST = "manifest.json"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSourceBundle:
+    """A verified, portable set of filtered BuildKit source contexts."""
+
+    root: Path
+    bundle_sha256: str
+    context_paths: dict[str, Path]
+    context_sha256: dict[str, str]
+    manifest: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -512,105 +536,344 @@ def build_backend_image_command(config: AerithConfig) -> list[str]:
     ]
 
 
-def prepare_runtime_build_contexts(config: AerithConfig) -> Path:
-    """Stage source-only contexts, excluding local envs, outputs, and weights."""
+_RUNTIME_IGNORED_NAMES = (
+    ".git",
+    ".venv",
+    "__pycache__",
+    "*.pyc",
+    "checkpoint",
+    "ckpt",
+    "output",
+    "outputs",
+    "PD1_output",
+    "test_outputs",
+    "search_database",
+    "examples",
+    "tests",
+    "docs",
+    "benchmarks",
+    "assets",
+    "build",
+    ".github",
+    ".pytest_cache",
+)
 
-    sources = {
+
+def _runtime_source_paths(config: AerithConfig) -> dict[str, Path]:
+    return {
         "af3-src": Path(config.runtime.af3_source_dir).expanduser().resolve(),
         "protenix-src": Path(config.runtime.protenix_source_dir).expanduser().resolve(),
         "opendde-src": Path(config.runtime.opendde_source_dir).expanduser().resolve(),
         "esm-src": Path(config.runtime.esm_source_dir).expanduser().resolve(),
     }
-    for name, source, expected in (
-        (
-            "opendde-src",
-            sources["opendde-src"],
-            config.runtime.opendde_source_commit,
-        ),
-        ("esm-src", sources["esm-src"], config.runtime.esm_source_commit),
-    ):
-        completed = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        actual = completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def _git_head(source: Path) -> str | None:
+    completed = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    actual = completed.stdout.strip() if completed.returncode == 0 else ""
+    return actual or None
+
+
+def _validated_runtime_source_heads(
+    config: AerithConfig, sources: dict[str, Path]
+) -> dict[str, str | None]:
+    for name, source in sources.items():
+        if not source.is_dir():
+            raise BackendError(f"runtime build context {name} does not exist: {source}")
+    heads = {name: _git_head(source) for name, source in sources.items()}
+    expected_commits = {
+        "opendde-src": config.runtime.opendde_source_commit,
+        "esm-src": config.runtime.esm_source_commit,
+    }
+    for name, expected in expected_commits.items():
+        actual = heads[name]
         if actual != expected:
             raise BackendError(
                 f"runtime build context {name} commit mismatch: "
                 f"expected {expected}, found {actual or 'unavailable'}"
             )
+    return heads
+
+
+def _update_hash_field(digest: Any, value: str | bytes) -> None:
+    encoded = value.encode("utf-8") if isinstance(value, str) else value
+    digest.update(len(encoded).to_bytes(8, byteorder="big"))
+    digest.update(encoded)
+
+
+def _hash_runtime_context(root: Path) -> dict[str, int | str]:
+    """Hash all BuildKit-visible paths, including names and permission bits."""
+
+    if not root.is_dir():
+        raise BackendError(f"runtime source context does not exist: {root}")
+    digest = hashlib.sha256(b"aerith-runtime-context-v1\0")
+    file_count = 0
+    size_bytes = 0
+    paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        metadata = path.lstat()
+        mode = metadata.st_mode & 0o7777
+        if path.is_symlink():
+            target = os.readlink(path)
+            _update_hash_field(digest, "symlink")
+            _update_hash_field(digest, relative)
+            _update_hash_field(digest, f"{mode:o}")
+            _update_hash_field(digest, target)
+            file_count += 1
+            size_bytes += len(os.fsencode(target))
+        elif path.is_dir():
+            _update_hash_field(digest, "directory")
+            _update_hash_field(digest, relative)
+            _update_hash_field(digest, f"{mode:o}")
+        elif path.is_file():
+            _update_hash_field(digest, "file")
+            _update_hash_field(digest, relative)
+            _update_hash_field(digest, f"{mode:o}")
+            _update_hash_field(digest, str(metadata.st_size))
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
+            file_count += 1
+            size_bytes += metadata.st_size
+        else:
+            raise BackendError(f"unsupported file in runtime source context: {path}")
+    return {
+        "sha256": digest.hexdigest(),
+        "file_count": file_count,
+        "size_bytes": size_bytes,
+    }
+
+
+def _runtime_bundle_digest(contexts: dict[str, dict[str, Any]]) -> str:
+    identity = {
+        "schema": RUNTIME_SOURCE_BUNDLE_SCHEMA,
+        "contexts": {
+            name: {
+                "path": contexts[name]["path"],
+                "sha256": contexts[name]["sha256"],
+                "file_count": contexts[name]["file_count"],
+                "size_bytes": contexts[name]["size_bytes"],
+            }
+            for name in RUNTIME_SOURCE_CONTEXTS
+        },
+    }
+    encoded = json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def create_runtime_source_bundle(
+    config: AerithConfig,
+    destination: Path,
+    *,
+    force: bool = False,
+) -> RuntimeSourceBundle:
+    """Copy four filtered source trees into an atomic, content-hashed bundle."""
+
+    sources = _runtime_source_paths(config)
+    heads = _validated_runtime_source_heads(config, sources)
+    expanded_destination = destination.expanduser()
+    if expanded_destination.is_symlink():
+        raise BackendError(
+            f"refusing to replace a symlink as a runtime source bundle: {expanded_destination}"
+        )
+    target_root = expanded_destination.resolve()
+    if target_root.exists() and not force:
+        raise BackendError(
+            f"runtime source bundle already exists: {target_root}; use force to replace it"
+        )
+    if target_root.exists() and force:
+        existing_manifest = target_root / RUNTIME_SOURCE_BUNDLE_MANIFEST
+        try:
+            existing_payload = json.loads(existing_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing_payload = None
+        if not isinstance(existing_payload, dict) or existing_payload.get("schema") != RUNTIME_SOURCE_BUNDLE_SCHEMA:
+            raise BackendError(
+                f"refusing to replace a non-bundle path: {target_root}"
+            )
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{target_root.name}.staging-",
+            dir=target_root.parent,
+        )
+    )
+    ignored = shutil.ignore_patterns(*_RUNTIME_IGNORED_NAMES)
+    # AF3's src/alphafold3/common is package code and must be retained. The
+    # OpenDDE root-level common directory contains mounted inference data.
+    opendde_ignored = shutil.ignore_patterns(*_RUNTIME_IGNORED_NAMES, "common")
+    try:
+        contexts: dict[str, dict[str, Any]] = {}
+        for name in RUNTIME_SOURCE_CONTEXTS:
+            source = sources[name]
+            copied = temporary / name
+            shutil.copytree(
+                source,
+                copied,
+                ignore=opendde_ignored if name == "opendde-src" else ignored,
+            )
+            context = _hash_runtime_context(copied)
+            contexts[name] = {
+                "path": name,
+                **context,
+                "source_path": str(source),
+                "source_git_commit": heads[name],
+            }
+        bundle_sha256 = _runtime_bundle_digest(contexts)
+        manifest: dict[str, Any] = {
+            "schema": RUNTIME_SOURCE_BUNDLE_SCHEMA,
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "bundle_sha256": bundle_sha256,
+            "contexts": contexts,
+            "filters": {
+                "all_contexts": list(_RUNTIME_IGNORED_NAMES),
+                "opendde-src_additional": ["common"],
+            },
+        }
+        atomic_write_json(temporary / RUNTIME_SOURCE_BUNDLE_MANIFEST, manifest)
+        if target_root.exists():
+            if target_root.is_dir() and not target_root.is_symlink():
+                shutil.rmtree(target_root)
+            else:
+                target_root.unlink()
+        temporary.replace(target_root)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return RuntimeSourceBundle(
+        root=target_root,
+        bundle_sha256=bundle_sha256,
+        context_paths={name: target_root / name for name in RUNTIME_SOURCE_CONTEXTS},
+        context_sha256={name: str(contexts[name]["sha256"]) for name in RUNTIME_SOURCE_CONTEXTS},
+        manifest=manifest,
+    )
+
+
+def verify_runtime_source_bundle(bundle_root: Path) -> RuntimeSourceBundle:
+    """Verify a bundle manifest and every BuildKit context before use."""
+
+    root = bundle_root.expanduser().resolve()
+    manifest_path = root / RUNTIME_SOURCE_BUNDLE_MANIFEST
+    if not manifest_path.is_file():
+        raise BackendError(f"runtime source bundle manifest does not exist: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BackendError(f"invalid runtime source bundle manifest: {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != RUNTIME_SOURCE_BUNDLE_SCHEMA:
+        raise BackendError(
+            f"unsupported runtime source bundle schema: {manifest.get('schema') if isinstance(manifest, dict) else None}"
+        )
+    contexts = manifest.get("contexts")
+    if not isinstance(contexts, dict) or set(contexts) != set(RUNTIME_SOURCE_CONTEXTS):
+        raise BackendError("runtime source bundle must contain exactly four named contexts")
+    verified_contexts: dict[str, dict[str, Any]] = {}
+    context_paths: dict[str, Path] = {}
+    for name in RUNTIME_SOURCE_CONTEXTS:
+        declared = contexts[name]
+        if not isinstance(declared, dict) or declared.get("path") != name:
+            raise BackendError(f"runtime source bundle context {name} has an invalid path")
+        path = root / name
+        actual = _hash_runtime_context(path)
+        for field in ("sha256", "file_count", "size_bytes"):
+            if declared.get(field) != actual[field]:
+                raise BackendError(
+                    f"runtime source bundle context {name} {field} mismatch: "
+                    f"expected {declared.get(field)}, found {actual[field]}"
+                )
+        verified_contexts[name] = {**declared, **actual, "path": name}
+        context_paths[name] = path
+    actual_bundle_sha256 = _runtime_bundle_digest(verified_contexts)
+    if manifest.get("bundle_sha256") != actual_bundle_sha256:
+        raise BackendError(
+            "runtime source bundle digest mismatch: "
+            f"expected {manifest.get('bundle_sha256')}, found {actual_bundle_sha256}"
+        )
+    return RuntimeSourceBundle(
+        root=root,
+        bundle_sha256=actual_bundle_sha256,
+        context_paths=context_paths,
+        context_sha256={name: str(verified_contexts[name]["sha256"]) for name in RUNTIME_SOURCE_CONTEXTS},
+        manifest=manifest,
+    )
+
+
+def prepare_runtime_build_contexts(config: AerithConfig) -> Path:
+    """Stage a verified source bundle in the work directory for local builds."""
+
     target_root = (
         Path(config.project.work_dir).expanduser().resolve()
         / "runtime-build"
         / "contexts"
     )
-    temporary = target_root.with_name(target_root.name + ".staging")
-    if temporary.exists():
-        shutil.rmtree(temporary)
-    temporary.mkdir(parents=True)
-    ignored_names = (
-        ".git",
-        ".venv",
-        "__pycache__",
-        "*.pyc",
-        "checkpoint",
-        "ckpt",
-        "output",
-        "outputs",
-        "PD1_output",
-        "test_outputs",
-        "search_database",
-        "examples",
-        "tests",
-        "docs",
-        "benchmarks",
-        "assets",
-        "build",
-        ".github",
-        ".pytest_cache",
-    )
-    ignored = shutil.ignore_patterns(*ignored_names)
-    # AF3's src/alphafold3/common is package code and must be staged.  The
-    # OpenDDE root-level common directory, by contrast, contains ~600 MiB of
-    # inference data and is mounted read-only at runtime via common_dir.
-    opendde_ignored = shutil.ignore_patterns(*ignored_names, "common")
-    for name, source in sources.items():
-        if not source.is_dir():
-            raise BackendError(f"runtime build context {name} does not exist: {source}")
-        shutil.copytree(
-            source,
-            temporary / name,
-            ignore=opendde_ignored if name == "opendde-src" else ignored,
-        )
+    # This exact work path predates the portable bundle manifest, so it may be
+    # an old unmanaged staging directory. It is disposable local build state.
     if target_root.exists():
-        shutil.rmtree(target_root)
-    temporary.replace(target_root)
-    return target_root
+        if target_root.is_dir() and not target_root.is_symlink():
+            shutil.rmtree(target_root)
+        else:
+            target_root.unlink()
+    return create_runtime_source_bundle(config, target_root).root
+
+
+def _runtime_recipe_sha256(dockerfile: Path) -> str:
+    repository_root = dockerfile.parents[2]
+    recipe_paths = (
+        dockerfile,
+        dockerfile.parent / "entrypoint.sh",
+        dockerfile.parent / "esm_if_batch.py",
+        dockerfile.parent / "openfold-cuda-11.6.patch",
+        repository_root / "docker" / "feature-builder" / "build_local_features.py",
+        repository_root / "docker" / "feature-builder" / "mmseqs_wrapper.py",
+        repository_root / "docker" / "feature-builder" / "convert_af3_templates.py",
+    )
+    digest = hashlib.sha256(b"aerith-runtime-recipe-v1\0")
+    for path in recipe_paths:
+        if not path.is_file():
+            raise BackendError(f"runtime build recipe file does not exist: {path}")
+        _update_hash_field(digest, path.relative_to(repository_root).as_posix())
+        _update_hash_field(digest, path.read_bytes())
+    return digest.hexdigest()
 
 
 def build_runtime_image_command(
     config: AerithConfig,
     *,
     context_root: Path | None = None,
+    source_bundle: Path | None = None,
 ) -> list[str]:
-    """Build the unified image from four explicit local source contexts."""
+    """Build from local sources, staged contexts, or a verified source bundle."""
 
     dockerfile = Path(config.runtime.dockerfile).expanduser().resolve()
-    if context_root is None:
-        sources = {
-            "af3-src": Path(config.runtime.af3_source_dir).expanduser().resolve(),
-            "protenix-src": Path(config.runtime.protenix_source_dir).expanduser().resolve(),
-            "opendde-src": Path(config.runtime.opendde_source_dir).expanduser().resolve(),
-            "esm-src": Path(config.runtime.esm_source_dir).expanduser().resolve(),
-        }
+    if context_root is not None and source_bundle is not None:
+        raise BackendError("context_root and source_bundle are mutually exclusive")
+    verified_bundle: RuntimeSourceBundle | None = None
+    if source_bundle is not None:
+        verified_bundle = verify_runtime_source_bundle(source_bundle)
+        sources = verified_bundle.context_paths
+    elif context_root is None:
+        sources = _runtime_source_paths(config)
     else:
-        sources = {
-            name: context_root.expanduser().resolve() / name
-            for name in ("af3-src", "protenix-src", "opendde-src", "esm-src")
-        }
+        resolved_context_root = context_root.expanduser().resolve()
+        if (resolved_context_root / RUNTIME_SOURCE_BUNDLE_MANIFEST).is_file():
+            verified_bundle = verify_runtime_source_bundle(resolved_context_root)
+            sources = verified_bundle.context_paths
+        else:
+            sources = {
+                name: resolved_context_root / name for name in RUNTIME_SOURCE_CONTEXTS
+            }
     if not dockerfile.is_file():
         raise BackendError(f"runtime Dockerfile does not exist: {dockerfile}")
     for name, source in sources.items():
@@ -623,12 +886,14 @@ def build_runtime_image_command(
             f"free; found {free_gib:.1f} GiB"
         )
     lock_root = dockerfile.parent / "locks"
-    lock_hash = hashlib.sha256()
-    for path in sorted(lock_root.glob("*.lock")):
-        lock_hash.update(path.name.encode("utf-8"))
-        lock_hash.update(path.read_bytes())
-    if not any(lock_root.glob("*.lock")):
+    lock_paths = sorted(lock_root.glob("*.lock"))
+    if not lock_paths:
         raise BackendError(f"runtime lock files do not exist: {lock_root}")
+    lock_hash = hashlib.sha256(b"aerith-runtime-locks-v1\0")
+    for path in lock_paths:
+        _update_hash_field(lock_hash, path.name)
+        _update_hash_field(lock_hash, path.read_bytes())
+    recipe_sha256 = _runtime_recipe_sha256(dockerfile)
     command = [config.backend.docker_bin, "build", "--progress", "plain"]
     if config.runtime.build_add_host:
         command.extend(["--add-host", config.runtime.build_add_host])
@@ -661,8 +926,28 @@ def build_runtime_image_command(
             f"FOLDSEEK_SHA256={config.runtime.foldseek_archive_sha256}",
             "--build-arg",
             f"RUNTIME_LOCK_SHA256={lock_hash.hexdigest()}",
+            "--build-arg",
+            f"RUNTIME_RECIPE_SHA256={recipe_sha256}",
+            "--build-arg",
+            "RUNTIME_SOURCE_BUNDLE_SHA256="
+            + (verified_bundle.bundle_sha256 if verified_bundle else "unavailable"),
         ]
     )
+    source_hash_arguments = {
+        "af3-src": "AF3_SOURCE_SHA256",
+        "protenix-src": "PROTENIX_SOURCE_SHA256",
+        "opendde-src": "OPENDDE_SOURCE_SHA256",
+        "esm-src": "ESM_SOURCE_SHA256",
+    }
+    for context_name in RUNTIME_SOURCE_CONTEXTS:
+        source_sha256 = (
+            verified_bundle.context_sha256[context_name]
+            if verified_bundle is not None
+            else "unavailable"
+        )
+        command.extend(
+            ["--build-arg", f"{source_hash_arguments[context_name]}={source_sha256}"]
+        )
     for name, source in sources.items():
         command.extend(["--build-context", f"{name}={source}"])
     command.extend(
