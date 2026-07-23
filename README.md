@@ -150,7 +150,10 @@ Target MSA and templates are built locally with GPU MMseqs2 and the configured
 AF3 database. The optional secondary backend reuses the target features. A de
 novo Binder remains query-only, with no paired MSA and no templates. Prediction
 and feature containers run with `--network none`; databases and checkpoints are
-mounted read-only.
+mounted read-only. Concurrent runs requesting the same target/database identity
+share a process-safe feature-cache lock: the first run performs the GPU search,
+while waiters revalidate and consume the published cache instead of launching
+duplicate MMseqs2 work.
 
 ## Effective backend semantics
 
@@ -336,6 +339,20 @@ Devices above `runtime.gpu_busy_threshold_mib` are excluded. Each container
 receives one physical device via `docker --gpus device=<host_gpu>` and sees it as
 device 0 internally.
 
+### Process lifecycle and timeouts
+
+Prediction, feature-builder, ESMFold, and ESM-IF shards use one shared,
+stage-scoped process executor. Every shard writes a shell-quoted command record,
+stdout, and stderr under its stage log directory. A timeout, Ctrl-C, or other
+controller exception terminates and reaps the complete process group; named
+Docker containers receive an additional bounded `docker rm -f` cleanup. Real
+negative signal return codes are preserved and a command that never started is
+reported without inventing a fake signal.
+
+ESM commands use `scoring.esm.timeout_seconds`; target feature preparation uses
+`features.timeout_seconds`. On Ctrl-C the current stage and run manifest are
+atomically persisted as `interrupted` before the interrupt is re-raised.
+
 ## Fingerprints, recovery, and provenance
 
 Automatic run IDs derive from the normalized scientific configuration and job
@@ -351,6 +368,13 @@ refuses it before overwriting resolved configuration or results. A nonempty run
 directory without a valid manifest is also refused. Standalone clustering must
 consume artifacts from the same run identity and schema.
 
+Interface parsing also publishes a content-addressed derivative bundle
+(normalized A/B complex, target, Binder, residue map, and coordinate NPZ). ESM,
+consensus, and Foldseek reuse that bundle. If a row declares a successful
+derivative and any bound file or checksum changes, downstream stages fail
+explicitly rather than silently reparsing another model or manufacturing a
+singleton cluster.
+
 CLI progress reports stage status, completed/total counts, and the literal
 messages `cache hit!` or `cache missing!`.
 
@@ -363,7 +387,22 @@ runtime and are not baked into image layers.
 
 ### Local development build
 
-For a local build directly from configured source directories:
+The Dockerfile requires four named source contexts. A direct BuildKit command
+from the repository root is:
+
+```bash
+docker build \
+  --build-context af3-src=/home/structure/Software/alphafold3-3.0.3 \
+  --build-context protenix-src=/home/structure/Software/Protenix-2.0.0 \
+  --build-context opendde-src=/home/structure/Software/OpenDDE \
+  --build-context esm-src=/home/structure/Software/esm \
+  --file docker/runtime/Dockerfile \
+  --tag aerith/fold-runtime:local \
+  .
+```
+
+For normal local builds, use the Aerith wrapper so configured source revisions,
+MMseqs2/Foldseek archives, and build contexts are validated before Docker runs:
 
 ```bash
 aerith config validate --config config.yaml
@@ -374,6 +413,21 @@ docker image inspect aerith/fold-runtime:local
 docker run --rm --gpus all --network none \
   aerith/fold-runtime:local doctor
 ```
+
+Docker image placement is controlled by the Docker daemon, not by this
+Dockerfile. To keep layers on an SSD, configure Docker's data root once and
+verify it before a large build:
+
+```bash
+docker info --format '{{.DockerRootDir}}'
+df -h /ssd
+docker system df
+```
+
+On a rootless installation the data-root path is configured in the rootless
+daemon settings. Moving individual image directories by hand is unsupported;
+export with Aerith, change the daemon data root, then reload the verified image
+when migration is required.
 
 ### Release build from a verified source bundle
 
