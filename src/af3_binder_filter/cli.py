@@ -447,12 +447,16 @@ def cluster_command(
             backend=backend,
             overrides=override or (),
             dry_run=dry_run,
+            initialize_run=False,
         )
         failed = run_clustering_only(context)
     except Exception as exc:  # noqa: BLE001
         _fail(str(exc))
     if failed and not context.config.project.allow_partial:
-        _fail(f"Foldseek clustering failed; partial singleton clusters are in {context.results_dir}")
+        _fail(
+            "Foldseek clustering failed; partial clustering audit outputs are in "
+            f"{context.results_dir}"
+        )
     console.print(f"Cluster outputs written to {context.results_dir}")
 
 

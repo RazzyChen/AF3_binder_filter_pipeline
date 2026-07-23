@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -14,14 +15,105 @@ from typing import Callable
 from af3_binder_filter.af3_json import TargetFeatures
 from af3_binder_filter.config import FeatureSettings
 from af3_binder_filter.io_utils import atomic_write_json, atomic_write_text
-from af3_binder_filter.jobs import sequence_sha256
+from af3_binder_filter.jobs import (
+    feature_database_identity,
+    local_feature_generation_fingerprint,
+    sequence_sha256,
+)
 
 
-FEATURE_MANIFEST_VERSION = 2
+FEATURE_MANIFEST_VERSION = 3
 
 
 class FeatureError(RuntimeError):
     """Raised when offline feature preparation is incomplete or inconsistent."""
+
+
+def _artifact_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def feature_bundle_artifact_identity(bundle: "FeatureBundle") -> dict[str, object]:
+    """Return path-free, complete identities for a prepared feature bundle."""
+
+    files = {
+        "pairing_a3m": bundle.pairing_a3m,
+        "non_pairing_a3m": bundle.non_pairing_a3m,
+        "hmmsearch_a3m": bundle.hmmsearch_a3m,
+        "af3_templates_json": bundle.af3_templates_json,
+    }
+    identities: dict[str, object] = {
+        name: {"size": path.stat().st_size, "sha256": _artifact_sha256(path)}
+        for name, path in files.items()
+    }
+    identities["template_mmcif_files"] = {
+        path.relative_to(bundle.template_mmcif_dir).as_posix(): {
+            "size": path.stat().st_size,
+            "sha256": _artifact_sha256(path),
+        }
+        for path in sorted(bundle.template_mmcif_dir.rglob("*"))
+        if path.is_file()
+    }
+    return identities
+
+
+def af3_feature_bundle_artifact_identity(
+    bundle: "AF3FeatureBundle",
+) -> dict[str, object]:
+    """Return path-free, complete identities for externalized AF3 features."""
+
+    templates: list[dict[str, object]] = []
+    for template in bundle.features.templates:
+        mmcif_value = template.get("mmcifPath")
+        mmcif = Path(str(mmcif_value)) if mmcif_value not in (None, "") else None
+        templates.append(
+            {
+                "mmcif": (
+                    {
+                        "size": mmcif.stat().st_size,
+                        "sha256": _artifact_sha256(mmcif),
+                    }
+                    if mmcif is not None and mmcif.is_file()
+                    else None
+                ),
+                "query_indices": list(template.get("queryIndices") or []),
+                "template_indices": list(template.get("templateIndices") or []),
+            }
+        )
+
+    def identity(value: str | Path | None) -> dict[str, object] | None:
+        if value in (None, ""):
+            return None
+        path = Path(str(value))
+        if not path.is_file():
+            return None
+        return {"size": path.stat().st_size, "sha256": _artifact_sha256(path)}
+
+    return {
+        "target_data": identity(bundle.target_data_json),
+        "unpaired_msa": identity(bundle.features.unpaired_msa_path),
+        "paired_msa": identity(bundle.features.paired_msa_path),
+        "templates": templates,
+    }
+
+
+def feature_bundle_content_sha256(
+    bundle: "FeatureBundle | AF3FeatureBundle",
+) -> str:
+    """Hash the exact generated feature artifacts, independent of placement."""
+
+    identity = (
+        af3_feature_bundle_artifact_identity(bundle)
+        if isinstance(bundle, AF3FeatureBundle)
+        else feature_bundle_artifact_identity(bundle)
+    )
+    return sequence_sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,31 +248,18 @@ def target_feature_dir(settings: FeatureSettings, target_sequence: str) -> Path:
     return Path(settings.cache_dir).expanduser() / sequence_sha256(target_sequence)
 
 
-def _bundle(settings: FeatureSettings, target_sequence: str) -> FeatureBundle:
+def _bundle(
+    settings: FeatureSettings,
+    target_sequence: str,
+    *,
+    database_identity: dict[str, object] | None = None,
+) -> FeatureBundle:
     digest = sequence_sha256(target_sequence)
     root = target_feature_dir(settings, target_sequence)
-    fingerprint = sequence_sha256(
-        json.dumps(
-            {
-                "sequence_sha256": digest,
-                "feature_mode": settings.name,
-                "image": settings.image,
-                "image_id": settings.image_id,
-                "docker_bin": settings.docker_bin,
-                "database_dir": str(Path(settings.database_dir).expanduser()),
-                "mmseqs_binary": settings.mmseqs_binary,
-                "mmseqs_id": settings.mmseqs_id,
-                "use_gpu": settings.use_gpu,
-                "threads": settings.threads,
-                "split_memory_limit": settings.split_memory_limit,
-                "iterations": settings.iterations,
-                "primary_database": settings.primary_database,
-                "environment_database": settings.environment_database,
-                "template_database": settings.template_database,
-                "use_environment_database": settings.use_environment_database,
-            },
-            sort_keys=True,
-        )
+    fingerprint = local_feature_generation_fingerprint(
+        settings,
+        target_sequence,
+        database_identity=database_identity,
     )
     return FeatureBundle(
         sequence_sha256=digest,
@@ -200,8 +279,14 @@ def _bundle(settings: FeatureSettings, target_sequence: str) -> FeatureBundle:
 def cached_target_features(
     settings: FeatureSettings,
     target_sequence: str,
+    *,
+    database_identity: dict[str, object] | None = None,
 ) -> FeatureBundle | None:
-    bundle = _bundle(settings, target_sequence)
+    bundle = _bundle(
+        settings,
+        target_sequence,
+        database_identity=database_identity,
+    )
     manifest_path = bundle.cache_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -212,6 +297,10 @@ def cached_target_features(
         ):
             return None
         bundle.validate()
+        if manifest.get("artifact_identities") != feature_bundle_artifact_identity(
+            bundle
+        ):
+            return None
         # The query must be the first sequence in both MSA files.
         expected_query = "".join(target_sequence.split()).upper()
         for msa_path in (
@@ -304,13 +393,27 @@ def prepare_target_features(
     force: bool = False,
     gpu_index: int = 0,
     log_dir: Path | None = None,
+    database_identity: dict[str, object] | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> FeaturePreparation:
-    cached = None if force else cached_target_features(settings, target_sequence)
+    selected_database_identity = (
+        database_identity
+        if database_identity is not None
+        else feature_database_identity(settings)
+    )
+    cached = None if force else cached_target_features(
+        settings,
+        target_sequence,
+        database_identity=selected_database_identity,
+    )
     if cached is not None:
         return FeaturePreparation(cached, None, reused=True)
 
-    bundle = _bundle(settings, target_sequence)
+    bundle = _bundle(
+        settings,
+        target_sequence,
+        database_identity=selected_database_identity,
+    )
     bundle.cache_dir.mkdir(parents=True, exist_ok=True)
     if dry_run:
         command, _query_fasta = build_feature_builder_command(
@@ -425,6 +528,7 @@ def prepare_target_features(
                 for key, value in asdict(bundle).items()
                 if isinstance(value, Path)
             },
+            "artifact_identities": feature_bundle_artifact_identity(bundle),
         },
     )
     return FeaturePreparation(bundle, tuple(command), reused=False)

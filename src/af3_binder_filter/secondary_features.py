@@ -17,12 +17,17 @@ from typing import Any
 
 import numpy as np
 
-from af3_binder_filter.features import AF3FeatureBundle, FeatureBundle, FeatureError
+from af3_binder_filter.features import (
+    AF3FeatureBundle,
+    FeatureBundle,
+    FeatureError,
+    feature_bundle_content_sha256,
+)
 from af3_binder_filter.io_utils import atomic_write_json, atomic_write_text
-from af3_binder_filter.jobs import sequence_sha256
+from af3_binder_filter.jobs import file_asset_identity, sequence_sha256
 
 
-SECONDARY_FEATURE_MANIFEST_VERSION = 2
+SECONDARY_FEATURE_MANIFEST_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +50,58 @@ class SecondaryFeatureBundle:
                 raise FeatureError("secondary templates enabled without an aligned template A3M")
             if self.template_count < 1 or not any(self.template_mmcif_dir.glob("*.cif")):
                 raise FeatureError("secondary templates enabled without staged mmCIF files")
+
+
+def secondary_feature_bundle_artifact_identity(
+    bundle: SecondaryFeatureBundle,
+) -> dict[str, Any]:
+    """Return exact identities for all adapted features consumed by prediction."""
+
+    template_ids: set[str] = set()
+    if bundle.hmmsearch_a3m is not None and bundle.hmmsearch_a3m.is_file():
+        for line in bundle.hmmsearch_a3m.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines():
+            if not line.startswith(">"):
+                continue
+            identifier = line[1:].split()[0].split("/", 1)[0].lower()
+            if identifier != "query" and len(identifier) >= 4:
+                template_ids.add(identifier[:4])
+    template_paths = {
+        pdb_id: bundle.template_mmcif_dir / f"{pdb_id}.cif"
+        for pdb_id in sorted(template_ids)
+    }
+    missing_templates = [
+        path for path in template_paths.values() if not path.is_file()
+    ]
+    if missing_templates:
+        raise FeatureError(
+            "secondary template A3M references missing mmCIF files: "
+            + ", ".join(path.name for path in missing_templates)
+        )
+    return {
+        "non_pairing_a3m": file_asset_identity(bundle.non_pairing_a3m),
+        "hmmsearch_a3m": file_asset_identity(bundle.hmmsearch_a3m),
+        "templates": {
+            pdb_id: file_asset_identity(path)
+            for pdb_id, path in template_paths.items()
+        },
+        "templates_enabled": bundle.templates_enabled,
+        "template_count": bundle.template_count,
+    }
+
+
+def secondary_feature_bundle_content_sha256(
+    bundle: SecondaryFeatureBundle,
+) -> str:
+    return sequence_sha256(
+        json.dumps(
+            secondary_feature_bundle_artifact_identity(bundle),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    )
 
 
 def _entry_id(path: Path) -> str:
@@ -111,6 +168,7 @@ def adapt_af3_features_for_secondary(
             {
                 "adapter_version": SECONDARY_FEATURE_MANIFEST_VERSION,
                 "af3_feature_fingerprint": bundle.fingerprint,
+                "af3_feature_content_sha256": feature_bundle_content_sha256(bundle),
                 "target_sequence_sha256": sequence_sha256(normalized),
                 "maximum_templates": maximum_templates,
                 "paired_msa": False,
@@ -139,6 +197,10 @@ def adapt_af3_features_for_secondary(
                 template_count=int(payload.get("template_count", 0)),
             )
             result.validate()
+            if payload.get(
+                "artifact_identity"
+            ) != secondary_feature_bundle_artifact_identity(result):
+                raise FeatureError("secondary feature artifact identity mismatch")
             return result
         except Exception:
             pass
@@ -213,6 +275,7 @@ def adapt_af3_features_for_secondary(
             "templates_enabled": result.templates_enabled,
             "template_count": result.template_count,
             "rejected_templates": rejected,
+            "artifact_identity": secondary_feature_bundle_artifact_identity(result),
         },
     )
     return result
@@ -257,9 +320,9 @@ def adapt_local_features_for_secondary(
             {
                 "adapter_version": SECONDARY_FEATURE_MANIFEST_VERSION,
                 "local_feature_fingerprint": bundle.fingerprint,
+                "local_feature_content_sha256": feature_bundle_content_sha256(bundle),
                 "target_sequence_sha256": sequence_sha256(normalized),
                 "maximum_templates": maximum_templates,
-                "source_mmcif_dir": str(source_mmcif_dir),
                 "paired_msa": False,
             },
             sort_keys=True,
@@ -287,6 +350,10 @@ def adapt_local_features_for_secondary(
                 template_count=int(payload.get("template_count", 0)),
             )
             result.validate()
+            if payload.get(
+                "artifact_identity"
+            ) != secondary_feature_bundle_artifact_identity(result):
+                raise FeatureError("secondary feature artifact identity mismatch")
             return result
         except Exception:
             pass
@@ -357,6 +424,7 @@ def adapt_local_features_for_secondary(
             "template_count": result.template_count,
             "selected_templates": selected_templates,
             "rejected_templates": rejected,
+            "artifact_identity": secondary_feature_bundle_artifact_identity(result),
         },
     )
     return result

@@ -44,7 +44,9 @@ from af3_binder_filter.features import (
     FeatureBundle,
     FeaturePreparation,
     _bundle as expected_feature_bundle,
+    af3_feature_bundle_artifact_identity,
     cached_target_features,
+    feature_bundle_content_sha256,
     prepare_target_features,
 )
 from af3_binder_filter.interface import (
@@ -63,13 +65,17 @@ from af3_binder_filter.jobs import (
     JobSpec,
     build_job_plan,
     checkpoint_identity,
+    feature_generation_fingerprint,
+    file_sha256,
     job_fingerprint,
     run_fingerprint,
+    run_provenance,
     sequence_sha256,
 )
 from af3_binder_filter.gpu import GPUError, GPUInfo, query_gpus, select_free_gpus
 from af3_binder_filter.manifest import (
     JOB_MANIFEST_NAME,
+    MANIFEST_VERSION,
     RunManifest,
     load_manifest,
     validate_legacy_input,
@@ -79,6 +85,7 @@ from af3_binder_filter.rosetta import RosettaCliEngine
 from af3_binder_filter.output_layout import (
     OUTPUT_SCHEMA_VERSION,
     RunOutputLayout,
+    STAGE_DIRECTORIES,
 )
 from af3_binder_filter.progress import (
     NullProgressReporter,
@@ -88,7 +95,10 @@ from af3_binder_filter.progress import (
 )
 from af3_binder_filter.reporting import write_public_reports
 from af3_binder_filter.target_data import extract_target_features
-from af3_binder_filter.secondary_features import SecondaryFeatureBundle
+from af3_binder_filter.secondary_features import (
+    SecondaryFeatureBundle,
+    secondary_feature_bundle_content_sha256,
+)
 from af3_binder_filter.secondary_features import adapt_af3_features_for_secondary
 from af3_binder_filter.secondary_features import adapt_local_features_for_secondary
 from af3_binder_filter.consensus import consensus_rows
@@ -116,6 +126,9 @@ class RunContext:
     run_id: str
     results_dir: Path
     manifest_path: Path
+    provenance: dict[str, Any] | None = None
+    feature_fingerprint: str | None = None
+    feature_database_identity: dict[str, Any] | None = None
 
     @property
     def layout(self) -> RunOutputLayout:
@@ -253,29 +266,7 @@ def _overrides_with_runtime(
 
 
 def _af3_feature_fingerprint(config: AerithConfig, target_sequence: str) -> str:
-    configured_data = config.backend.target_data_json
-    data_digest: str | None = None
-    if configured_data:
-        path = Path(configured_data).expanduser()
-        if path.is_file():
-            data_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        else:
-            data_digest = "missing"
-    payload = {
-        "mode": "alphafold3_target_only",
-        "target_sequence_sha256": sequence_sha256(target_sequence),
-        "target_chain": config.project.target_chain,
-        "seed": config.project.seed,
-        "backend_model": config.backend.model,
-        "backend_image": config.backend.image,
-        "backend_image_id": config.backend.image_id,
-        "database_dir": str(Path(config.features.database_dir).expanduser()),
-        "target_data_json": str(configured_data) if configured_data else None,
-        "target_data_sha256": data_digest,
-    }
-    return sequence_sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    )
+    return feature_generation_fingerprint(config, target_sequence)
 
 
 def _expected_feature_fingerprint(
@@ -290,12 +281,22 @@ def _expected_feature_fingerprint(
 def _expected_feature_cache_dir(
     config: AerithConfig,
     target_sequence: str,
+    *,
+    fingerprint: str | None = None,
 ) -> Path:
     if config.backend.name == "alphafold3" and config.backend.target_data_json:
         digest = sequence_sha256(target_sequence)
-        fingerprint = _af3_feature_fingerprint(config, target_sequence)
-        return Path(config.features.cache_dir).expanduser() / digest / "af3" / fingerprint[:16]
-    return expected_feature_bundle(config.features, target_sequence).cache_dir
+        selected = fingerprint or _af3_feature_fingerprint(config, target_sequence)
+        return (
+            Path(config.features.cache_dir).expanduser()
+            / digest
+            / "af3"
+            / selected[:16]
+        )
+    return (
+        Path(config.features.cache_dir).expanduser()
+        / sequence_sha256(target_sequence)
+    )
 
 
 def _target_feature_cache_hit(context: RunContext) -> bool:
@@ -307,15 +308,13 @@ def _target_feature_cache_hit(context: RunContext) -> bool:
         context.config.backend.name == "alphafold3"
         and context.config.backend.target_data_json
     ):
-        fingerprint = _af3_feature_fingerprint(
-            context.config,
-            context.plan.target_sequence,
-        )
+        fingerprint = _context_feature_fingerprint(context)
         return (
             _af3_bundle_from_manifest(
                 _expected_feature_cache_dir(
                     context.config,
                     context.plan.target_sequence,
+                    fingerprint=fingerprint,
                 ),
                 target_sequence=context.plan.target_sequence,
                 fingerprint=fingerprint,
@@ -326,6 +325,7 @@ def _target_feature_cache_hit(context: RunContext) -> bool:
         cached_target_features(
             context.config.features,
             context.plan.target_sequence,
+            database_identity=context.feature_database_identity,
         )
         is not None
     )
@@ -362,6 +362,7 @@ def create_run_context(
     overrides: Iterable[str] = (),
     limit: int | None = None,
     dry_run: bool | None = None,
+    initialize_run: bool = True,
 ) -> RunContext:
     config, resolved = compose_hydra_config(
         config_path,
@@ -369,16 +370,40 @@ def create_run_context(
         secondary_backend=secondary_backend,
         overrides=_overrides_with_runtime(overrides, limit=limit, dry_run=dry_run),
     )
-    if config.backend.image_id is None:
-        config.backend.image_id = resolve_docker_image_id(
-            config.backend.docker_bin,
-            config.backend.image,
+
+    inspected_images: dict[tuple[str, str], str | None] = {}
+
+    def verified_image_id(settings: Any, label: str) -> str:
+        image_key = (settings.docker_bin, settings.image)
+        if image_key not in inspected_images:
+            inspected_images[image_key] = resolve_docker_image_id(*image_key)
+        actual = inspected_images[image_key]
+        if not actual:
+            raise PipelineExecutionError(
+                f"cannot resolve the actual Docker image ID for {label}: "
+                f"{settings.image}"
+            )
+        if settings.image_id is not None and settings.image_id != actual:
+            raise PipelineExecutionError(
+                f"configured {label} image_id {settings.image_id!r} does not "
+                f"match actual image ID {actual!r} for {settings.image}"
+            )
+        return actual
+
+    config.backend.image_id = verified_image_id(config.backend, "primary backend")
+    config.backend.image = config.backend.image_id
+    OmegaConf.update(
+        resolved,
+        "backend.image_id",
+        config.backend.image_id,
+        merge=False,
+    )
+    OmegaConf.update(resolved, "backend.image", config.backend.image, merge=False)
+    if config.secondary_backend.enabled:
+        config.secondary_backend.image_id = verified_image_id(
+            config.secondary_backend, "secondary backend"
         )
-    if config.secondary_backend.enabled and config.secondary_backend.image_id is None:
-        config.secondary_backend.image_id = resolve_docker_image_id(
-            config.secondary_backend.docker_bin,
-            config.secondary_backend.image,
-        )
+        config.secondary_backend.image = config.secondary_backend.image_id
         OmegaConf.update(
             resolved,
             "secondary_backend.image_id",
@@ -387,32 +412,19 @@ def create_run_context(
         )
         OmegaConf.update(
             resolved,
-            "backend.image_id",
-            config.backend.image_id,
-            merge=False,
-        )
-    if config.secondary_backend.enabled and config.secondary_backend.image_id is None:
-        config.secondary_backend.image_id = resolve_docker_image_id(
-            config.secondary_backend.docker_bin,
+            "secondary_backend.image",
             config.secondary_backend.image,
-        )
-        OmegaConf.update(
-            resolved,
-            "secondary_backend.image_id",
-            config.secondary_backend.image_id,
             merge=False,
         )
-    if config.features.image_id is None:
-        config.features.image_id = resolve_docker_image_id(
-            config.features.docker_bin,
-            config.features.image,
-        )
-        OmegaConf.update(
-            resolved,
-            "features.image_id",
-            config.features.image_id,
-            merge=False,
-        )
+    config.features.image_id = verified_image_id(config.features, "feature builder")
+    config.features.image = config.features.image_id
+    OmegaConf.update(
+        resolved,
+        "features.image_id",
+        config.features.image_id,
+        merge=False,
+    )
+    OmegaConf.update(resolved, "features.image", config.features.image, merge=False)
     if config.features.mmseqs_id is None:
         config.features.mmseqs_id = (
             f"{config.features.image_id}:mmseqs:{config.runtime.mmseqs_version}"
@@ -424,18 +436,21 @@ def create_run_context(
             merge=False,
         )
     plan = build_job_plan(config)
-    feature_fingerprint = _expected_feature_fingerprint(config, plan.target_sequence)
+    provenance = run_provenance(plan, config)
+    feature_fingerprint = str(
+        provenance["feature_generation_identity_sha256"]
+    )
+    feature_database_release = provenance["scientific_config"]["features"].get(
+        "database_release"
+    )
     fingerprint = run_fingerprint(
         plan,
         config,
-        feature_fingerprint=feature_fingerprint,
+        provenance=provenance,
     )
     run_id = config.project.run_id or f"run-{fingerprint[:12]}"
     results_dir = Path(config.project.results_dir) / run_id
-    RunOutputLayout(results_dir).ensure()
-    resolved_container = OmegaConf.to_container(resolved, resolve=True)
-    atomic_write_yaml(results_dir / "resolved_config.yaml", resolved_container)
-    return RunContext(
+    context = RunContext(
         config=config,
         resolved_config=resolved,
         plan=plan,
@@ -443,10 +458,78 @@ def create_run_context(
         run_id=run_id,
         results_dir=results_dir,
         manifest_path=results_dir / "manifest.json",
+        provenance=provenance,
+        feature_fingerprint=feature_fingerprint,
+        feature_database_identity=(
+            dict(feature_database_release)
+            if isinstance(feature_database_release, dict)
+            else None
+        ),
     )
+    existing_manifest: RunManifest | None = None
+    if results_dir.exists():
+        if not results_dir.is_dir():
+            raise PipelineExecutionError(
+                f"run output path exists and is not a directory: {results_dir}"
+            )
+        try:
+            nonempty = next(results_dir.iterdir(), None) is not None
+        except OSError as exc:
+            raise PipelineExecutionError(
+                f"cannot inspect existing run directory {results_dir}: {exc}"
+            ) from exc
+        if nonempty:
+            payload = load_manifest(context.manifest_path)
+            if payload is None:
+                raise PipelineExecutionError(
+                    "existing non-empty run directory has no valid manifest; "
+                    f"refusing to overwrite {results_dir}"
+                )
+            existing_manifest = _manifest_from_payload(
+                context,
+                feature_fingerprint,
+                payload,
+                verify_resolved_config=True,
+            )
+        elif not initialize_run:
+            raise PipelineExecutionError(
+                f"standalone run directory is empty: {results_dir}"
+            )
+    elif not initialize_run:
+        raise PipelineExecutionError(
+            f"standalone run directory does not exist: {results_dir}"
+        )
+    if not initialize_run:
+        if existing_manifest is None:
+            raise PipelineExecutionError(
+                f"standalone run has no validated manifest: {results_dir}"
+            )
+        return context
+    RunOutputLayout(results_dir).ensure()
+    resolved_container = OmegaConf.to_container(resolved, resolve=True)
+    resolved_config_path = results_dir / "resolved_config.yaml"
+    atomic_write_yaml(resolved_config_path, resolved_container)
+    manifest = existing_manifest or _new_manifest(context, feature_fingerprint)
+    manifest.feature_fingerprint = feature_fingerprint
+    manifest.job_fingerprints = {
+        job.job_id: job_fingerprint(
+            job,
+            config,
+            feature_fingerprint=feature_fingerprint,
+        )
+        for job in plan.jobs
+    }
+    manifest.resolved_config_sha256 = file_sha256(resolved_config_path)
+    manifest.provenance = _context_provenance(
+        context,
+        feature_fingerprint,
+    )
+    manifest.write(context.manifest_path)
+    return context
 
 
 def _new_manifest(context: RunContext, feature_fingerprint: str) -> RunManifest:
+    provenance = _context_provenance(context, feature_fingerprint)
     return RunManifest(
         run_id=context.run_id,
         fingerprint=context.fingerprint,
@@ -467,6 +550,30 @@ def _new_manifest(context: RunContext, feature_fingerprint: str) -> RunManifest:
         primary_image_id=context.config.backend.image_id,
         secondary_image_id=context.config.secondary_backend.image_id,
         feature_fingerprint=feature_fingerprint,
+        source_csv_sha256=provenance.get("source_csv_sha256"),
+        resolved_config_sha256=file_sha256(
+            context.results_dir / "resolved_config.yaml"
+        ),
+        provenance=provenance,
+    )
+
+
+def _context_provenance(
+    context: RunContext,
+    feature_fingerprint: str,
+) -> dict[str, Any]:
+    if context.provenance is not None:
+        return context.provenance
+    return run_provenance(
+        context.plan,
+        context.config,
+    )
+
+
+def _context_feature_fingerprint(context: RunContext) -> str:
+    return getattr(context, "feature_fingerprint", None) or _expected_feature_fingerprint(
+        context.config,
+        context.plan.target_sequence,
     )
 
 
@@ -475,35 +582,167 @@ def _existing_or_new_manifest(
     feature_fingerprint: str,
 ) -> RunManifest:
     payload = load_manifest(context.manifest_path)
-    if payload is None or payload.get("fingerprint") != context.fingerprint:
+    if payload is None:
+        if context.manifest_path.exists():
+            raise PipelineExecutionError(
+                f"run manifest is invalid: {context.manifest_path}"
+            )
         return _new_manifest(context, feature_fingerprint)
-    try:
-        return RunManifest(
-            run_id=str(payload["run_id"]),
-            fingerprint=str(payload["fingerprint"]),
-            backend=str(payload["backend"]),
-            model=str(payload["model"]),
-            source_csv=str(payload["source_csv"]),
-            target_sequence_sha256=str(payload["target_sequence_sha256"]),
-            job_fingerprints=dict(payload["job_fingerprints"]),
-            secondary_backend=str(payload.get("secondary_backend", "none")),
-            secondary_model=str(payload.get("secondary_model", "none")),
-            primary_image_id=payload.get("primary_image_id"),
-            secondary_image_id=payload.get("secondary_image_id"),
-            feature_fingerprint=payload.get("feature_fingerprint"),
-            status=str(payload.get("status", "running")),
-            created_at=str(payload["created_at"]),
-            updated_at=str(payload["updated_at"]),
-            stage_status=dict(payload.get("stage_status") or {}),
-            gpu_assignments=dict(payload.get("gpu_assignments") or {}),
-            errors=list(payload.get("errors") or []),
-            output_schema_version=int(
-                payload.get("output_schema_version", OUTPUT_SCHEMA_VERSION)
-            ),
-            version=int(payload.get("version", 1)),
+    return _manifest_from_payload(
+        context,
+        feature_fingerprint,
+        payload,
+        verify_resolved_config=True,
+    )
+
+
+def _manifest_from_payload(
+    context: RunContext,
+    feature_fingerprint: str,
+    payload: dict[str, Any],
+    *,
+    verify_resolved_config: bool,
+) -> RunManifest:
+    """Fully validate a persisted run manifest before any resume-side write."""
+
+    if payload.get("fingerprint") != context.fingerprint:
+        raise PipelineExecutionError(
+            f"run_id {context.run_id!r} already exists with a different fingerprint; "
+            "refusing to mix artifacts from different configurations"
         )
-    except (KeyError, TypeError, ValueError):
-        return _new_manifest(context, feature_fingerprint)
+
+    def string(name: str, *, optional: bool = False) -> str | None:
+        value = payload.get(name)
+        if optional and value is None:
+            return None
+        if not isinstance(value, str) or not value:
+            raise TypeError(f"{name} must be a non-empty string")
+        return value
+
+    def string_mapping(name: str) -> dict[str, str]:
+        value = payload.get(name)
+        if not isinstance(value, dict) or not all(
+            isinstance(key, str) and isinstance(item, str)
+            for key, item in value.items()
+        ):
+            raise TypeError(f"{name} must be a string mapping")
+        return dict(value)
+
+    try:
+        job_fingerprints = string_mapping("job_fingerprints")
+        artifact_sha256 = string_mapping("artifact_sha256")
+        effective_model_sha256 = string_mapping("effective_model_sha256")
+        provenance = payload.get("provenance")
+        stage_status = payload.get("stage_status")
+        gpu_assignments = payload.get("gpu_assignments")
+        errors = payload.get("errors")
+        if not isinstance(provenance, dict):
+            raise TypeError("provenance must be a mapping")
+        if not isinstance(stage_status, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in stage_status.items()
+        ):
+            raise TypeError("stage_status must be a string mapping")
+        if not isinstance(gpu_assignments, dict):
+            raise TypeError("gpu_assignments must be a mapping")
+        if not isinstance(errors, list) or not all(
+            isinstance(error, str) for error in errors
+        ):
+            raise TypeError("errors must be a string list")
+        manifest = RunManifest(
+            run_id=string("run_id") or "",
+            fingerprint=string("fingerprint") or "",
+            backend=string("backend") or "",
+            model=string("model") or "",
+            source_csv=string("source_csv") or "",
+            target_sequence_sha256=string("target_sequence_sha256") or "",
+            job_fingerprints=job_fingerprints,
+            secondary_backend=string("secondary_backend") or "",
+            secondary_model=string("secondary_model") or "",
+            primary_image_id=string("primary_image_id", optional=True),
+            secondary_image_id=string("secondary_image_id", optional=True),
+            feature_fingerprint=string("feature_fingerprint", optional=True),
+            feature_content_sha256=string(
+                "feature_content_sha256", optional=True
+            ),
+            source_csv_sha256=string("source_csv_sha256") or "",
+            resolved_config_sha256=string("resolved_config_sha256") or "",
+            provenance=provenance,
+            artifact_sha256=artifact_sha256,
+            effective_model_sha256=effective_model_sha256,
+            status=string("status") or "",
+            created_at=string("created_at") or "",
+            updated_at=string("updated_at") or "",
+            stage_status=dict(stage_status),
+            gpu_assignments=dict(gpu_assignments),
+            errors=list(errors),
+            output_schema_version=payload["output_schema_version"],
+            version=payload["version"],
+        )
+        if type(manifest.output_schema_version) is not int or (
+            manifest.output_schema_version != OUTPUT_SCHEMA_VERSION
+        ):
+            raise TypeError("output_schema_version is invalid")
+        if type(manifest.version) is not int or manifest.version != MANIFEST_VERSION:
+            raise TypeError("manifest version is invalid")
+        if manifest.run_id != context.run_id:
+            raise TypeError("manifest run_id does not match the run directory")
+        if manifest.target_sequence_sha256 != sequence_sha256(
+            context.plan.target_sequence
+        ):
+            raise TypeError("target sequence identity does not match")
+        expected_job_fingerprints = {
+            job.job_id: job_fingerprint(
+                job,
+                context.config,
+                feature_fingerprint=feature_fingerprint,
+            )
+            for job in context.plan.jobs
+        }
+        if manifest.job_fingerprints != expected_job_fingerprints:
+            raise TypeError("job_fingerprints do not match the immutable job plan")
+        if manifest.feature_fingerprint != feature_fingerprint:
+            raise TypeError("feature fingerprint does not match the run plan")
+        if (
+            manifest.backend != context.config.backend.name
+            or manifest.model != context.config.backend.model
+            or manifest.secondary_backend != context.config.secondary_backend.name
+            or manifest.secondary_model != context.config.secondary_backend.model
+        ):
+            raise TypeError("backend/model fields do not match the run plan")
+        expected_provenance = _context_provenance(context, feature_fingerprint)
+        if manifest.provenance != expected_provenance:
+            raise TypeError("stored provenance does not match the run fingerprint")
+        if manifest.source_csv_sha256 != expected_provenance.get(
+            "source_csv_sha256"
+        ):
+            raise TypeError("source CSV identity does not match")
+        if manifest.primary_image_id != context.config.backend.image_id:
+            raise TypeError("primary image identity does not match")
+        expected_secondary_image = (
+            context.config.secondary_backend.image_id
+            if context.config.secondary_backend.enabled
+            else None
+        )
+        if manifest.secondary_image_id != expected_secondary_image:
+            raise TypeError("secondary image identity does not match")
+        bound_feature_content = manifest.artifact_sha256.get("target_features")
+        if manifest.feature_content_sha256 != bound_feature_content:
+            raise TypeError("prepared feature content binding is inconsistent")
+        if (
+            manifest.stage_status.get("features") == "success"
+            and not manifest.feature_content_sha256
+        ):
+            raise TypeError("successful feature stage has no content binding")
+        if verify_resolved_config and manifest.resolved_config_sha256 != file_sha256(
+            context.results_dir / "resolved_config.yaml"
+        ):
+            raise TypeError("resolved_config.yaml does not match its manifest SHA256")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PipelineExecutionError(
+            f"run manifest is invalid: {context.manifest_path}"
+        ) from exc
+    return manifest
 
 
 def prepare_features_stage(context: RunContext) -> FeaturePreparation:
@@ -530,6 +769,7 @@ def prepare_features_stage(context: RunContext) -> FeaturePreparation:
             stage_name="features",
         )[0].index,
         log_dir=log_dir,
+        database_identity=context.feature_database_identity,
     )
     if preparation.command:
         atomic_write_text(
@@ -540,16 +780,15 @@ def prepare_features_stage(context: RunContext) -> FeaturePreparation:
 
 
 def run_prepare_features_only(context: RunContext) -> FeaturePreparation:
-    feature_fingerprint = _expected_feature_fingerprint(
-        context.config,
-        context.plan.target_sequence,
-    )
+    feature_fingerprint = _context_feature_fingerprint(context)
     manifest = _existing_or_new_manifest(context, feature_fingerprint)
     manifest.stage_status["features"] = "running"
     manifest.status = "running"
     manifest.write(context.manifest_path)
     try:
         preparation = prepare_features_stage(context)
+        if preparation.bundle is not None:
+            _bind_feature_content(manifest, preparation.bundle)
         manifest.stage_status["features"] = (
             "dry_run" if context.config.runtime.dry_run else "success"
         )
@@ -619,16 +858,90 @@ def _af3_bundle_from_manifest(
         bundle.validate()
     except Exception:
         return None
+    if payload.get("artifact_identity") != _af3_bundle_artifact_identity(bundle):
+        return None
     return bundle
+
+
+def _af3_bundle_artifact_identity(bundle: AF3FeatureBundle) -> dict[str, Any]:
+    return dict(af3_feature_bundle_artifact_identity(bundle))
+
+
+def _bind_feature_content(
+    manifest: RunManifest,
+    bundle: FeatureBundle | AF3FeatureBundle,
+) -> str:
+    """Bind the exact prepared MSA/template bytes to the run manifest."""
+
+    digest = feature_bundle_content_sha256(bundle)
+    manifest.feature_content_sha256 = digest
+    manifest.artifact_sha256["target_features"] = digest
+    return digest
+
+
+def _prediction_feature_identity(
+    bundle: FeatureBundle | AF3FeatureBundle | SecondaryFeatureBundle,
+) -> str:
+    """Bind prediction reuse to generation settings and exact feature bytes."""
+
+    content_sha256 = (
+        secondary_feature_bundle_content_sha256(bundle)
+        if isinstance(bundle, SecondaryFeatureBundle)
+        else feature_bundle_content_sha256(bundle)
+    )
+    return sequence_sha256(
+        json.dumps(
+            {
+                "generation_fingerprint": bundle.fingerprint,
+                "content_sha256": content_sha256,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    )
+
+
+def _primary_prediction_feature_identity(context: RunContext) -> str:
+    """Recover the exact primary feature identity for standalone validation."""
+
+    feature_fingerprint = _context_feature_fingerprint(context)
+    manifest_path = getattr(context, "manifest_path", None)
+    payload = load_manifest(manifest_path) if isinstance(manifest_path, Path) else None
+    content_sha256 = (
+        payload.get("feature_content_sha256")
+        if isinstance(payload, dict)
+        else None
+    )
+    if not isinstance(content_sha256, str) or not content_sha256:
+        # Compatibility for direct library callers that predate/run outside a
+        # validated RunContext. Production standalone CLI manifests require
+        # this field whenever the feature stage succeeded.
+        return feature_fingerprint
+    return sequence_sha256(
+        json.dumps(
+            {
+                "generation_fingerprint": feature_fingerprint,
+                "content_sha256": content_sha256,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    )
 
 
 def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
     config = context.config
     target_sequence = context.plan.target_sequence
-    fingerprint = _af3_feature_fingerprint(config, target_sequence)
-    if fingerprint != _expected_feature_fingerprint(config, target_sequence):
+    fingerprint = _context_feature_fingerprint(context)
+    if fingerprint != _af3_feature_fingerprint(config, target_sequence):
         raise PipelineExecutionError("AF3 target feature fingerprint changed during setup")
-    cache_dir = _expected_feature_cache_dir(config, target_sequence)
+    cache_dir = _expected_feature_cache_dir(
+        config,
+        target_sequence,
+        fingerprint=fingerprint,
+    )
     cached = None if config.runtime.force else _af3_bundle_from_manifest(
         cache_dir,
         target_sequence=target_sequence,
@@ -738,6 +1051,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
                     "paired_msa_path": absolute_features.paired_msa_path,
                     "templates": absolute_features.templates,
                 },
+                "artifact_identity": _af3_bundle_artifact_identity(bundle),
             },
         )
         return FeaturePreparation(
@@ -789,8 +1103,10 @@ def _backend_job_fingerprint(
                 ),
                 "backend": backend.name,
                 "model": backend.model,
-                "image": backend.image,
-                "image_id": backend.image_id,
+                "runtime_image_id": backend.image_id,
+                "runtime_image_reference": (
+                    None if backend.image_id else backend.image
+                ),
                 "checkpoint": checkpoint_identity(backend.checkpoint_path),
             },
             sort_keys=True,
@@ -1121,10 +1437,11 @@ def prediction_stage(
     output_root = (
         Path(context.config.project.output_dir) / context.run_id / backend.name
     )
+    prediction_feature_identity = _prediction_feature_identity(target_features)
     reusable, pending = _reusable_predictions(
         context,
         input_paths,
-        target_features.fingerprint,
+        prediction_feature_identity,
         jobs=active_jobs,
         backend=backend,
         output_root=output_root,
@@ -1279,7 +1596,7 @@ def prediction_stage(
                 fingerprint=_backend_job_fingerprint(
                     context,
                     job,
-                    target_features.fingerprint,
+                    prediction_feature_identity,
                     backend,
                 ),
                 backend=backend.name,
@@ -2199,11 +2516,8 @@ def run_pipeline(
         reporter.pipeline_finished(status=status, detail=detail)
         pipeline_reported = True
 
-    expected_feature_fingerprint = _expected_feature_fingerprint(
-        context.config,
-        context.plan.target_sequence,
-    )
-    manifest = _new_manifest(context, expected_feature_fingerprint)
+    expected_feature_fingerprint = _context_feature_fingerprint(context)
+    manifest = _existing_or_new_manifest(context, expected_feature_fingerprint)
     manifest.write(context.manifest_path)
     reporter.message("Preflight: validating configuration, images, paths, and GPU policy")
     if not context.config.runtime.dry_run:
@@ -2449,6 +2763,7 @@ def run_pipeline(
             raise PipelineExecutionError(
                 "prepared target feature fingerprint differs from the run plan"
             )
+        _bind_feature_content(manifest, preparation.bundle)
         manifest.stage_status["features"] = "success"
         manifest.write(context.manifest_path)
         reporter.task_finished(
@@ -2770,12 +3085,21 @@ def run_pipeline(
         candidates = [row for row in final_rows if row.get("candidate_pool")]
         manual_review = [row for row in final_rows if row.get("manual_review")]
         consensus_layout = context.layout.stage("consensus")
-        atomic_write_csv(consensus_layout.tables / "consensus_results.csv", final_rows)
-        atomic_write_csv(consensus_layout.tables / "candidates_full.csv", candidates)
+        consensus_results_path = consensus_layout.tables / "consensus_results.csv"
+        candidates_full_path = consensus_layout.tables / "candidates_full.csv"
+        atomic_write_csv(consensus_results_path, final_rows)
+        atomic_write_csv(candidates_full_path, candidates)
         atomic_write_csv(
             consensus_layout.tables / "secondary_backend_rows.csv", secondary_rows
         )
         atomic_write_csv(consensus_layout.tables / "manual_review.csv", manual_review)
+        manifest.artifact_sha256["consensus_results"] = (
+            file_sha256(consensus_results_path) or ""
+        )
+        manifest.artifact_sha256["consensus_candidates"] = (
+            file_sha256(candidates_full_path) or ""
+        )
+        manifest.write(context.manifest_path)
         finish_stage("consensus", manifest.stage_status["consensus"])
 
         if context.config.scoring.esm.enabled:
@@ -2806,18 +3130,20 @@ def run_pipeline(
         candidates = [row for row in final_rows if row.get("candidate_pool")]
         required_failure |= esm_failed
 
+        _persist_clustering_inputs(context, final_rows, manifest)
+        _clustering_all_rows, clustering_candidates = _validated_clustering_inputs(
+            context, manifest
+        )
+
         start_stage("clustering")
         manifest.stage_status["clustering"] = "running"
         manifest.write(context.manifest_path)
-        candidate_ids = {str(row["job_name"]) for row in candidates}
+        candidate_ids = {str(row["job_name"]) for row in clustering_candidates}
         cluster_jobs = tuple(
             job for job in context.plan.jobs if job.job_id in candidate_ids
         )
-        effective_prediction_by_job = {
-            prediction.job_id: prediction for prediction in effective_predictions
-        }
         cluster_predictions = tuple(
-            effective_prediction_by_job[job.job_id] for job in cluster_jobs
+            _effective_predictions_from_rows(cluster_jobs, clustering_candidates)
         )
         cluster_detail = (
             f"{len(cluster_jobs)} candidates / "
@@ -2833,7 +3159,7 @@ def run_pipeline(
             cluster_outcome = clustering_stage(
                 context,
                 cluster_predictions,
-                candidates,
+                clustering_candidates,
                 jobs=cluster_jobs,
                 manifest=manifest,
             )
@@ -2891,6 +3217,18 @@ def run_pipeline(
             ),
             clustering_status=manifest.stage_status["clustering"],
         )
+        manifest.artifact_sha256["public_all_results"] = (
+            file_sha256(context.layout.all_results) or ""
+        )
+        manifest.artifact_sha256["public_candidates"] = (
+            file_sha256(context.layout.candidates) or ""
+        )
+        manifest.artifact_sha256["public_final_shortlist"] = (
+            file_sha256(context.layout.final_shortlist) or ""
+        )
+        manifest.artifact_sha256["backend_review"] = (
+            file_sha256(context.layout.backend_review) or ""
+        )
 
         manifest.status = "partial" if required_failure else "success"
         manifest.write(context.manifest_path)
@@ -2936,10 +3274,7 @@ def load_predictions_for_context(
         / context.run_id
         / context.config.backend.name
     )
-    feature_fingerprint = _expected_feature_fingerprint(
-        context.config,
-        context.plan.target_sequence,
-    )
+    feature_fingerprint = _primary_prediction_feature_identity(context)
     input_dir = (
         Path(context.config.project.work_dir)
         / context.run_id
@@ -3020,10 +3355,7 @@ def load_predictions_for_context(
 
 
 def run_interface_only(context: RunContext) -> list[dict[str, Any]]:
-    feature_fingerprint = _expected_feature_fingerprint(
-        context.config,
-        context.plan.target_sequence,
-    )
+    feature_fingerprint = _context_feature_fingerprint(context)
     manifest = _existing_or_new_manifest(context, feature_fingerprint)
     manifest.stage_status["primary_interface"] = "running"
     manifest.status = "running"
@@ -3040,6 +3372,15 @@ def run_interface_only(context: RunContext) -> list[dict[str, Any]]:
         for row in rows:
             row["candidate_pool"] = bool(row.get("final_pass"))
         write_public_reports(context.layout, rows, clustering_status="not_run")
+        manifest.artifact_sha256["public_all_results"] = (
+            file_sha256(context.layout.all_results) or ""
+        )
+        manifest.artifact_sha256["public_candidates"] = (
+            file_sha256(context.layout.candidates) or ""
+        )
+        manifest.artifact_sha256["backend_review"] = (
+            file_sha256(context.layout.backend_review) or ""
+        )
         failed = _interface_stage_failed(
             rows,
             energy_engine=context.config.interface.energy_engine,
@@ -3070,33 +3411,198 @@ def _read_interface_rows(path: Path) -> list[dict[str, Any]]:
         return list(csv.DictReader(handle))
 
 
-def run_clustering_only(context: RunContext) -> bool:
-    feature_fingerprint = _expected_feature_fingerprint(
-        context.config,
-        context.plan.target_sequence,
+def _clustering_input_paths(context: RunContext) -> tuple[Path, Path]:
+    # Construct paths without ``RunOutputLayout.stage()``, whose ensure call
+    # would create directories before standalone artifact validation.
+    tables = (
+        context.results_dir
+        / "stages"
+        / STAGE_DIRECTORIES["clustering"]
+        / "tables"
     )
-    manifest = _existing_or_new_manifest(context, feature_fingerprint)
-    manifest.stage_status["clustering"] = "running"
-    manifest.status = "running"
+    return tables / "clustering_input.csv", tables / "clustering_candidates.csv"
+
+
+def _persist_clustering_inputs(
+    context: RunContext,
+    rows: Sequence[dict[str, Any]],
+    manifest: RunManifest,
+) -> None:
+    """Commit the complete post-ESM table and its candidate projection."""
+
+    ordered = sorted((dict(row) for row in rows), key=_final_sort_key)
+    candidates = [row for row in ordered if _row_truthy(row.get("candidate_pool"))]
+    fieldnames = sorted({key for row in ordered for key in row})
+    all_path, candidate_path = _clustering_input_paths(context)
+    model_identities: dict[str, str] = {}
+    for row in ordered:
+        job_id = str(row.get("job_name", row.get("job_id", "")))
+        model_value = row.get("effective_best_model_path")
+        if model_value in (None, ""):
+            continue
+        model_sha = file_sha256(Path(str(model_value)))
+        if model_sha is None:
+            raise PipelineExecutionError(
+                f"effective model is missing while freezing clustering input: {job_id}"
+            )
+        derived_sha = row.get("effective_derived_source_model_sha256")
+        if derived_sha not in (None, "") and str(derived_sha) != model_sha:
+            raise PipelineExecutionError(
+                f"effective model content changed after interface analysis: {job_id}"
+            )
+        model_identities[job_id] = model_sha
+    atomic_write_csv(all_path, ordered, fieldnames=fieldnames)
+    atomic_write_csv(candidate_path, candidates, fieldnames=fieldnames)
+    manifest.artifact_sha256["clustering_input_schema"] = sequence_sha256(
+        json.dumps(fieldnames, separators=(",", ":"), ensure_ascii=True)
+    )
+    manifest.artifact_sha256["clustering_input"] = file_sha256(all_path) or ""
+    manifest.artifact_sha256["clustering_candidates"] = (
+        file_sha256(candidate_path) or ""
+    )
+    manifest.effective_model_sha256 = model_identities
     manifest.write(context.manifest_path)
+
+
+def _row_truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _validated_clustering_inputs(
+    context: RunContext,
+    manifest: RunManifest,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Validate both canonical tables and every selected effective model."""
+
+    all_path, candidate_path = _clustering_input_paths(context)
+    for key, path in (
+        ("clustering_input", all_path),
+        ("clustering_candidates", candidate_path),
+    ):
+        expected = manifest.artifact_sha256.get(key)
+        actual = file_sha256(path)
+        if not expected or actual != expected:
+            raise PipelineExecutionError(
+                f"{key} does not match the run manifest: {path}"
+            )
+    all_rows = _read_interface_rows(all_path)
+    candidate_rows = _read_interface_rows(candidate_path)
+    if not all_rows:
+        raise PipelineExecutionError("clustering_input.csv has no job rows")
+    all_columns = set(all_rows[0])
+    candidate_columns = set(candidate_rows[0]) if candidate_rows else all_columns
+    with all_path.open(encoding="utf-8", newline="") as handle:
+        all_header = next(csv.reader(handle), [])
+    with candidate_path.open(encoding="utf-8", newline="") as handle:
+        candidate_header = next(csv.reader(handle), [])
+    schema_sha = sequence_sha256(
+        json.dumps(all_header, separators=(",", ":"), ensure_ascii=True)
+    )
+    if (
+        all_header != candidate_header
+        or manifest.artifact_sha256.get("clustering_input_schema") != schema_sha
+    ):
+        raise PipelineExecutionError(
+            "clustering input column schema does not match the run manifest"
+        )
+    required_columns = {
+        "job_name",
+        "candidate_pool",
+        "effective_backend",
+        "effective_status",
+        "effective_best_model_path",
+    }
+    if context.config.scoring.esm.enabled and context.config.scoring.esm.esmfold:
+        required_columns.add("esmfold_status")
+    if (
+        context.config.scoring.esm.enabled
+        and context.config.scoring.esm.inverse_folding
+    ):
+        required_columns.add("esm_if_status")
+    if not required_columns.issubset(all_columns) or candidate_columns != all_columns:
+        raise PipelineExecutionError(
+            "clustering input schema is incomplete or candidate/all schemas differ"
+        )
+
+    def indexed(rows: Sequence[dict[str, Any]], label: str) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            job_id = str(row.get("job_name", row.get("job_id", "")))
+            if not job_id or job_id in result:
+                raise PipelineExecutionError(
+                    f"{label} has a missing or duplicate job identity: {job_id!r}"
+                )
+            row["job_name"] = job_id
+            result[job_id] = row
+        return result
+
+    all_by_job = indexed(all_rows, "clustering_input.csv")
+    candidates_by_job = indexed(candidate_rows, "clustering_candidates.csv")
+    planned_ids = {job.job_id for job in context.plan.jobs}
+    selected_ids = {
+        job_id
+        for job_id, row in all_by_job.items()
+        if _row_truthy(row.get("candidate_pool"))
+    }
+    if set(all_by_job) != planned_ids:
+        raise PipelineExecutionError(
+            "clustering_input.csv job membership does not match the immutable plan"
+        )
+    if set(candidates_by_job) != selected_ids:
+        raise PipelineExecutionError(
+            "clustering_candidates.csv membership does not match candidate_pool"
+        )
+    expected_bound_ids = {
+        job_id
+        for job_id, row in all_by_job.items()
+        if row.get("effective_best_model_path") not in (None, "")
+    }
+    if set(manifest.effective_model_sha256) != expected_bound_ids:
+        raise PipelineExecutionError(
+            "effective model bindings do not match clustering_input.csv"
+        )
+    for job_id in expected_bound_ids:
+        row = all_by_job[job_id]
+        actual_model_sha = file_sha256(
+            Path(str(row["effective_best_model_path"]))
+        )
+        if actual_model_sha != manifest.effective_model_sha256[job_id]:
+            raise PipelineExecutionError(
+                f"effective model does not match the run manifest for {job_id}"
+            )
+        derived_sha = row.get("effective_derived_source_model_sha256")
+        if derived_sha not in (None, "") and str(derived_sha) != actual_model_sha:
+            raise PipelineExecutionError(
+                f"derived/model identity mismatch for {job_id}"
+            )
+    for job_id, candidate in candidates_by_job.items():
+        if candidate != all_by_job[job_id]:
+            raise PipelineExecutionError(
+                f"candidate row differs from clustering input for {job_id}"
+            )
+        model_value = candidate.get("effective_best_model_path")
+        expected_model_sha = manifest.effective_model_sha256.get(job_id)
+        if model_value in (None, "") or not expected_model_sha:
+            raise PipelineExecutionError(
+                f"candidate {job_id} has no manifest-bound effective model"
+            )
+    return all_rows, candidate_rows
+
+
+def run_clustering_only(context: RunContext) -> bool:
+    feature_fingerprint = _context_feature_fingerprint(context)
+    manifest = _existing_or_new_manifest(context, feature_fingerprint)
+    stage_started = False
     try:
-        # Validate the primary artifact contract before consuming the run's
-        # effective projection.  The selected structure itself may be primary
-        # or secondary and is reconstructed from the fingerprinted table.
-        load_predictions_for_context(context)
-        consensus_tables = context.layout.stage("consensus").tables
-        candidates_path = consensus_tables / "candidates_full.csv"
-        if not candidates_path.is_file():
-            candidates_path = context.results_dir / "interface_candidates.csv"
-        rows = _read_interface_rows(candidates_path)
-        selected_ids = {
-            str(row["job_name"])
-            for row in rows
-            if str(row.get("candidate_pool", row.get("final_pass", ""))).lower()
-            in {"true", "1", "yes"}
-        }
+        all_rows, selected_rows = _validated_clustering_inputs(context, manifest)
+        stage_started = True
+        manifest.stage_status["clustering"] = "running"
+        manifest.status = "running"
+        manifest.write(context.manifest_path)
+        selected_ids = {str(row["job_name"]) for row in selected_rows}
         jobs = tuple(job for job in context.plan.jobs if job.job_id in selected_ids)
-        selected_rows = [row for row in rows if str(row["job_name"]) in selected_ids]
         selected_predictions = tuple(
             _effective_predictions_from_rows(jobs, selected_rows)
         )
@@ -3112,12 +3618,6 @@ def run_clustering_only(context: RunContext) -> bool:
             else ClusteringOutcome(failed=False)
         )
         failed = outcome.failed
-        all_rows_path = consensus_tables / "consensus_results.csv"
-        all_rows = (
-            _read_interface_rows(all_rows_path)
-            if all_rows_path.is_file()
-            else rows
-        )
         write_public_reports(
             context.layout,
             all_rows,
@@ -3128,6 +3628,18 @@ def run_clustering_only(context: RunContext) -> bool:
             ),
             clustering_status="partial" if failed else "success",
         )
+        manifest.artifact_sha256["public_all_results"] = (
+            file_sha256(context.layout.all_results) or ""
+        )
+        manifest.artifact_sha256["public_candidates"] = (
+            file_sha256(context.layout.candidates) or ""
+        )
+        manifest.artifact_sha256["public_final_shortlist"] = (
+            file_sha256(context.layout.final_shortlist) or ""
+        )
+        manifest.artifact_sha256["backend_review"] = (
+            file_sha256(context.layout.backend_review) or ""
+        )
         if context.config.runtime.dry_run:
             manifest.stage_status["clustering"] = "dry_run"
             manifest.status = "dry_run"
@@ -3137,9 +3649,10 @@ def run_clustering_only(context: RunContext) -> bool:
         manifest.write(context.manifest_path)
         return failed
     except Exception as exc:
-        manifest.stage_status["clustering"] = "error"
-        manifest.status = "error"
-        if str(exc) not in manifest.errors:
-            manifest.errors.append(str(exc))
-        manifest.write(context.manifest_path)
+        if stage_started:
+            manifest.stage_status["clustering"] = "error"
+            manifest.status = "error"
+            if str(exc) not in manifest.errors:
+                manifest.errors.append(str(exc))
+            manifest.write(context.manifest_path)
         raise

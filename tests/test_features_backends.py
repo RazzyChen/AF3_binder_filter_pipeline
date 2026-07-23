@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import subprocess
 from pathlib import Path
@@ -20,6 +21,7 @@ from af3_binder_filter.features import (
     FeatureError,
     FeatureBundle,
     build_feature_builder_command,
+    cached_target_features,
     prepare_target_features,
     write_query_only_msa,
 )
@@ -252,6 +254,13 @@ def test_feature_preparation_publishes_complete_cache_atomically(
     assert preparation.bundle is not None
     assert (preparation.bundle.cache_dir / "manifest.json").is_file()
     assert not list(preparation.bundle.cache_dir.glob(".feature-build-*"))
+    assert cached_target_features(settings, "ACDE") is not None
+
+    preparation.bundle.non_pairing_a3m.write_text(
+        preparation.bundle.non_pairing_a3m.read_text() + ">extra\nACDE\n"
+    )
+
+    assert cached_target_features(settings, "ACDE") is None
 
 
 def test_feature_preparation_failure_does_not_publish_manifest(
@@ -273,6 +282,52 @@ def test_feature_preparation_failure_does_not_publish_manifest(
     assert len(cache_roots) == 1
     assert not (cache_roots[0] / "manifest.json").exists()
     assert not list(cache_roots[0].glob(".feature-build-*"))
+
+
+def test_feature_cache_misses_after_sampled_database_content_changes(
+    tmp_path: Path,
+) -> None:
+    database_root = tmp_path / "db"
+    mmseqs_dir = database_root / "mmseqs"
+    mmcif_dir = database_root / "mmcif_files"
+    mmseqs_dir.mkdir(parents=True)
+    mmcif_dir.mkdir()
+    database = mmseqs_dir / "uniref90_padded"
+    database.write_bytes(b"A" * (4 * 1024 * 1024 + 17))
+    settings = FeatureSettings(
+        database_dir=str(database_root),
+        cache_dir=str(tmp_path / "cache"),
+        mmseqs_dir=str(mmseqs_dir),
+        pdb_seqres_fasta=str(database_root / "pdb_seqres.fasta"),
+        mmcif_dir=str(mmcif_dir),
+        primary_database="uniref90_padded",
+        template_database="uniref90_padded",
+        use_environment_database=False,
+    )
+
+    def runner(command, **_kwargs):
+        output_mount = next(
+            value for value in command if value.endswith(":/output")
+        )
+        output = Path(output_mount.removesuffix(":/output"))
+        for name in ("pairing.a3m", "non_pairing.a3m", "hmmsearch.a3m"):
+            (output / name).write_text(">query\nACDE\n")
+        (output / "templates").mkdir()
+        (output / "af3_templates.json").write_text(
+            json.dumps({"version": 1, "templates": []})
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    preparation = prepare_target_features(settings, "ACDE", runner=runner)
+    assert preparation.bundle is not None
+    assert cached_target_features(settings, "ACDE") is not None
+    original_stat = database.stat()
+
+    with database.open("r+b") as handle:
+        handle.write(b"B")
+    os.utime(database, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+    assert cached_target_features(settings, "ACDE") is None
 
 
 @pytest.mark.parametrize("backend", ["protenix", "opendde"])

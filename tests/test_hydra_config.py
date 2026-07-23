@@ -454,7 +454,11 @@ def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(tmp_path: Path) -> Non
         / "logs"
         / "prediction.command.txt"
     ).read_text()
-    assert " aerith/fold-runtime:local prepare-features " in feature_command
+    assert context.config.features.image.startswith("sha256:")
+    assert (
+        f" {context.config.features.image} prepare-features " in feature_command
+    )
+    assert " aerith/fold-runtime:local prepare-features " not in feature_command
     assert "--use-gpu 1" in feature_command
     assert "GPU MMseqs2 preprocessing" in prediction_command
     assert {path.name for path in context.results_dir.glob("*.csv")} == {

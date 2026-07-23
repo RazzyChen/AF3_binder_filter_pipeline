@@ -13,7 +13,7 @@ from af3_binder_filter.jobs import JobPlan, JobSpec
 from af3_binder_filter.output_layout import OUTPUT_SCHEMA_VERSION
 
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 JOB_MANIFEST_NAME = ".aerith_manifest.json"
 
 
@@ -31,6 +31,12 @@ class RunManifest:
     primary_image_id: str | None = None
     secondary_image_id: str | None = None
     feature_fingerprint: str | None = None
+    feature_content_sha256: str | None = None
+    source_csv_sha256: str | None = None
+    resolved_config_sha256: str | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
+    artifact_sha256: dict[str, str] = field(default_factory=dict)
+    effective_model_sha256: dict[str, str] = field(default_factory=dict)
     status: str = "running"
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
