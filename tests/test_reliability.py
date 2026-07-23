@@ -403,6 +403,30 @@ def test_primary_only_context_records_all_resolved_image_and_source_ids(
     assert manifest["provenance"]["output_schema"]["version"] == 3
 
 
+def test_pipeline_keyboard_interrupt_is_persisted_and_re_raised(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    context = create_run_context(
+        _run_config(tmp_path),
+        overrides=_run_overrides(tmp_path),
+        dry_run=True,
+    )
+
+    def interrupt(_context):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(workflow, "prepare_features_stage", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        workflow.run_pipeline(context)
+
+    manifest = json.loads(context.manifest_path.read_text())
+    assert manifest["status"] == "interrupted"
+    assert manifest["stage_status"]["features"] == "interrupted"
+    assert "pipeline interrupted by user" in manifest["errors"]
+
+
 def test_explicit_run_id_rejects_fingerprint_change_before_any_write(
     tmp_path: Path, monkeypatch
 ) -> None:

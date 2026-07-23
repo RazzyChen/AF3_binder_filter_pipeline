@@ -14,6 +14,7 @@ from typing import Callable
 
 from af3_binder_filter.af3_json import TargetFeatures
 from af3_binder_filter.config import FeatureSettings
+from af3_binder_filter.execution import CommandSpec, LocalDockerExecutor
 from af3_binder_filter.io_utils import atomic_write_json, atomic_write_text
 from af3_binder_filter.jobs import (
     feature_database_identity,
@@ -321,6 +322,7 @@ def build_feature_builder_command(
     target_sequence: str,
     output_dir: Path,
     gpu_index: int = 0,
+    container_name: str | None = None,
 ) -> tuple[list[str], Path]:
     database = Path(settings.database_dir).expanduser().resolve()
     output = output_dir.expanduser().resolve()
@@ -333,6 +335,8 @@ def build_feature_builder_command(
         "--network",
         "none",
     ]
+    if container_name:
+        command.extend(["--name", container_name])
     if settings.use_gpu:
         command.extend(["--gpus", f"device={gpu_index}"])
     command.extend(
@@ -394,7 +398,8 @@ def prepare_target_features(
     gpu_index: int = 0,
     log_dir: Path | None = None,
     database_identity: dict[str, object] | None = None,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    container_name: str | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> FeaturePreparation:
     selected_database_identity = (
         database_identity
@@ -421,6 +426,7 @@ def prepare_target_features(
             target_sequence=target_sequence,
             output_dir=bundle.cache_dir,
             gpu_index=gpu_index,
+            container_name=container_name,
         )
         if log_dir is not None:
             atomic_write_text(
@@ -437,6 +443,7 @@ def prepare_target_features(
         target_sequence=target_sequence,
         output_dir=build_dir,
         gpu_index=gpu_index,
+        container_name=container_name,
     )
     if log_dir is not None:
         atomic_write_text(
@@ -444,29 +451,59 @@ def prepare_target_features(
             " ".join(command) + "\n",
         )
     try:
-        try:
-            completed = runner(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=settings.timeout_seconds,
-                check=False,
+        if runner is None:
+            execution_log_dir = log_dir or (build_dir / ".execution_logs")
+            outcome = LocalDockerExecutor(
+                docker_executable=settings.docker_bin,
+            ).run(
+                CommandSpec.logged(
+                    command,
+                    log_dir=execution_log_dir,
+                    name="prepare_features",
+                    timeout_seconds=settings.timeout_seconds,
+                    stage="features",
+                    shard_id=gpu_index,
+                )
             )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise FeatureError(f"feature-builder execution failed: {exc}") from exc
-        if log_dir is not None:
-            atomic_write_text(
-                log_dir / "prepare_features.stdout.log",
-                completed.stdout or "",
+            returncode = outcome.returncode
+            stderr_text = (
+                outcome.command.stderr_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                if outcome.command.stderr_path.is_file()
+                else ""
             )
-            atomic_write_text(
-                log_dir / "prepare_features.stderr.log",
-                completed.stderr or "",
-            )
-        if completed.returncode != 0:
+            if outcome.error is not None:
+                raise FeatureError(
+                    f"feature-builder execution failed: {outcome.error}"
+                )
+        else:
+            try:
+                completed = runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=settings.timeout_seconds,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise FeatureError(f"feature-builder execution failed: {exc}") from exc
+            returncode = completed.returncode
+            stderr_text = completed.stderr or ""
+            if log_dir is not None:
+                atomic_write_text(
+                    log_dir / "prepare_features.stdout.log",
+                    completed.stdout or "",
+                )
+                atomic_write_text(
+                    log_dir / "prepare_features.stderr.log",
+                    stderr_text,
+                )
+        if returncode != 0:
             raise FeatureError(
-                f"feature-builder failed with return code {completed.returncode}: "
-                f"{completed.stderr.strip()}"
+                f"feature-builder failed with return code {returncode}: "
+                f"{stderr_text.strip()}"
             )
         built_paths = {
             bundle.pairing_a3m: build_dir / "pairing.a3m",

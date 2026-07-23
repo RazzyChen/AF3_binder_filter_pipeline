@@ -449,6 +449,8 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         errors.append("features.iterations must be at least 1")
     if config.features.timeout_seconds < 1:
         errors.append("features.timeout_seconds must be at least 1")
+    if config.scoring.esm.timeout_seconds < 1:
+        errors.append("scoring.esm.timeout_seconds must be at least 1")
     if config.runtime.geometry_max_workers < 1:
         errors.append("runtime.geometry_max_workers must be at least 1")
     expected_rosetta_interface = f"{project.target_chain}_{project.binder_chain}"

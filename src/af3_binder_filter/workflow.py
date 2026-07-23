@@ -7,8 +7,8 @@ import hashlib
 import json
 import math
 import re
+import shlex
 import shutil
-import subprocess
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, replace
@@ -52,6 +52,11 @@ from af3_binder_filter.features import (
 from af3_binder_filter.derived_structures import (
     DerivedStructureValidationError,
     validated_artifacts_from_row,
+)
+from af3_binder_filter.execution import (
+    CommandSpec,
+    LocalCommandExecutor,
+    LocalDockerExecutor,
 )
 from af3_binder_filter.interface import (
     analyze_interface_geometry,
@@ -762,16 +767,22 @@ def prepare_features_stage(context: RunContext) -> FeaturePreparation:
                 " ".join(preparation.command) + "\n",
             )
         return preparation
+    feature_gpu = _runtime_gpus(
+        context,
+        job_count=1,
+        stage_name="features",
+    )[0]
     preparation = prepare_target_features(
         context.config.features,
         context.plan.target_sequence,
         dry_run=context.config.runtime.dry_run,
         force=context.config.runtime.force,
-        gpu_index=_runtime_gpus(
+        gpu_index=feature_gpu.index,
+        container_name=_container_name(
             context,
-            job_count=1,
-            stage_name="features",
-        )[0].index,
+            "feature-builder",
+            feature_gpu.index,
+        ),
         log_dir=log_dir,
         database_identity=context.feature_database_identity,
     )
@@ -801,6 +812,14 @@ def run_prepare_features_only(context: RunContext) -> FeaturePreparation:
         )
         manifest.write(context.manifest_path)
         return preparation
+    except KeyboardInterrupt:
+        message = "feature preparation interrupted by user"
+        manifest.stage_status["features"] = "interrupted"
+        manifest.status = "interrupted"
+        if message not in manifest.errors:
+            manifest.errors.append(message)
+        manifest.write(context.manifest_path)
+        raise
     except Exception as exc:
         manifest.stage_status["features"] = "error"
         manifest.status = "error"
@@ -984,16 +1003,22 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
             seed=config.project.seed,
             force=True,
         )
-        gpu_index = _runtime_gpus(
+        feature_gpu = _runtime_gpus(
             context,
             job_count=1,
             stage_name="features",
-        )[0].index
+        )[0]
+        gpu_index = feature_gpu.index
         command = build_backend_command(
             config,
             input_dir=input_dir,
             output_dir=output_dir,
             gpu_index=gpu_index,
+            container_name=_container_name(
+                context,
+                "target_features",
+                gpu_index,
+            ),
         )
         if config.runtime.dry_run:
             return FeaturePreparation(None, tuple(command), reused=False)
@@ -1001,6 +1026,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
             context,
             command,
             name="target_features",
+            timeout_seconds=config.features.timeout_seconds,
         )
         if return_code != 0:
             shutil.rmtree(build_root, ignore_errors=True)
@@ -1187,31 +1213,28 @@ def _run_prediction_command(
     command: Sequence[str],
     *,
     name: str = "prediction",
-) -> int:
+    timeout_seconds: float | None = None,
+    executor: LocalCommandExecutor | None = None,
+) -> int | None:
     log_dir = context.layout.stage(_command_stage_name(name)).logs
-    atomic_write_text(
-        log_dir / f"{name}.command.txt",
-        " ".join(command) + "\n",
+    if not command:
+        raise PipelineExecutionError(f"{name} command is empty")
+    runner = executor or LocalDockerExecutor(
+        docker_executable=str(command[0]),
     )
-    if context.config.runtime.dry_run:
-        return 0
-    stdout_path = log_dir / f"{name}.stdout.log"
-    stderr_path = log_dir / f"{name}.stderr.log"
-    process: subprocess.Popen[str] | None = None
-    try:
-        with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr:
-            process = subprocess.Popen(list(command), stdout=stdout, stderr=stderr, text=True)
-            return process.wait()
-    except BaseException:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        raise
+    outcome = runner.run(
+        CommandSpec.logged(
+            command,
+            log_dir=log_dir,
+            name=name,
+            timeout_seconds=timeout_seconds,
+            stage=_command_stage_name(name),
+        ),
+        dry_run=context.config.runtime.dry_run,
+    )
+    if outcome.error is not None:
+        raise PipelineExecutionError(f"{name}: {outcome.error}")
+    return outcome.returncode
 
 
 def _run_sharded_commands(
@@ -1221,7 +1244,9 @@ def _run_sharded_commands(
     *,
     progress_probe: Callable[[], int] | None = None,
     progress_callback: Callable[[int], None] | None = None,
-) -> tuple[dict[int, int], list[str]]:
+    timeout_seconds: float | None = None,
+    executor: LocalCommandExecutor | None = None,
+) -> tuple[dict[int, int | None], list[str]]:
     """Run one Docker command per GPU concurrently and preserve every log."""
 
     log_dir = context.layout.stage(_command_stage_name(stage_name)).logs
@@ -1232,26 +1257,41 @@ def _run_sharded_commands(
                 shard.gpu.index,
                 ",".join(job.job_id for job in shard.jobs),
             )
-            + " ".join(command)
+            + shlex.join(command)
             + "\n"
             for shard, command in commands
         ),
     )
-    if context.config.runtime.dry_run:
-        return ({shard.gpu.index: 0 for shard, _command in commands}, [])
+    if not commands:
+        return {}, []
+    if executor is None:
+        executables = {str(command[0]) for _shard, command in commands if command}
+        if len(executables) != 1 or any(not command for _shard, command in commands):
+            raise PipelineExecutionError(
+                f"{stage_name} shards must share one non-empty Docker executable"
+            )
+        executor = LocalDockerExecutor(docker_executable=executables.pop())
 
-    return_codes: dict[int, int] = {}
-    errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=max(1, len(commands))) as pool:
-        futures = {
-            pool.submit(
-                _run_prediction_command,
-                context,
+    return_codes: dict[int, int | None] = {}
+    errors_by_gpu: dict[int, str] = {}
+    pool = ThreadPoolExecutor(max_workers=max(1, len(commands)))
+    futures = {}
+    try:
+        for shard, command in commands:
+            spec = CommandSpec.logged(
                 command,
+                log_dir=log_dir,
                 name=f"{stage_name}.gpu_{shard.gpu.index}",
-            ): shard
-            for shard, command in commands
-        }
+                timeout_seconds=timeout_seconds,
+                stage=_command_stage_name(stage_name),
+                shard_id=shard.gpu.index,
+            )
+            future = pool.submit(
+                executor.run,
+                spec,
+                dry_run=context.config.runtime.dry_run,
+            )
+            futures[future] = shard
         pending_futures = set(futures)
         while pending_futures:
             done, pending_futures = wait(
@@ -1269,19 +1309,48 @@ def _run_sharded_commands(
             for future in done:
                 shard = futures[future]
                 try:
-                    return_codes[shard.gpu.index] = future.result()
+                    outcome = future.result()
                 except Exception as exc:
-                    return_codes[shard.gpu.index] = -1
-                    errors.append(
+                    return_codes[shard.gpu.index] = None
+                    errors_by_gpu[shard.gpu.index] = (
                         f"{stage_name} GPU {shard.gpu.index} raised "
                         f"{type(exc).__name__}: {exc}"
                     )
+                else:
+                    return_codes[shard.gpu.index] = outcome.returncode
+                    if outcome.error is not None:
+                        errors_by_gpu[shard.gpu.index] = (
+                            f"{stage_name} GPU {shard.gpu.index}: {outcome.error}"
+                        )
         if progress_probe is not None and progress_callback is not None:
             try:
                 progress_callback(progress_probe())
             except Exception:
                 pass
-    return return_codes, errors
+    except BaseException:
+        try:
+            executor.cancel_all()
+        except Exception:
+            # Preserve the original interruption/exception. Executor cleanup
+            # is best effort after all registered process groups were signalled.
+            pass
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    else:
+        pool.shutdown(wait=True)
+    return return_codes, [errors_by_gpu[index] for index in sorted(errors_by_gpu)]
+
+
+def _return_code_failure_message(
+    stage_name: str,
+    gpu_index: int,
+    return_code: int | None,
+) -> str:
+    if return_code is None:
+        return f"{stage_name} GPU {gpu_index} did not produce an exit code"
+    return f"{stage_name} GPU {gpu_index} command returned {return_code}"
 
 
 def _file_signature(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
@@ -1551,7 +1620,11 @@ def prediction_stage(
         for gpu_index, return_code in sorted(return_codes.items()):
             if return_code != 0:
                 manifest.errors.append(
-                    f"{stage_name} GPU {gpu_index} command returned {return_code}"
+                    _return_code_failure_message(
+                        stage_name,
+                        gpu_index,
+                        return_code,
+                    )
                 )
         command_failed = bool(command_errors) or any(
             return_code != 0 for return_code in return_codes.values()
@@ -2242,6 +2315,7 @@ def esm_stage(
             context,
             "esmfold",
             commands,
+            timeout_seconds=context.config.scoring.esm.timeout_seconds,
             progress_probe=esmfold_probe,
             progress_callback=lambda completed: reporter.task_progress(
                 "esm",
@@ -2252,7 +2326,7 @@ def esm_stage(
         )
         manifest.errors.extend(errors)
         manifest.errors.extend(
-            f"esmfold GPU {gpu_index} command returned {code}"
+            _return_code_failure_message("esmfold", gpu_index, code)
             for gpu_index, code in sorted(return_codes.items())
             if code != 0
         )
@@ -2317,6 +2391,7 @@ def esm_stage(
             context,
             "esm_if",
             commands,
+            timeout_seconds=context.config.scoring.esm.timeout_seconds,
             progress_probe=esm_if_probe,
             progress_callback=lambda completed: reporter.task_progress(
                 "esm",
@@ -2328,7 +2403,7 @@ def esm_stage(
         )
         manifest.errors.extend(errors)
         manifest.errors.extend(
-            f"esm_if GPU {gpu_index} command returned {code}"
+            _return_code_failure_message("esm_if", gpu_index, code)
             for gpu_index, code in sorted(return_codes.items())
             if code != 0
         )
@@ -2734,6 +2809,7 @@ def run_pipeline(
                         context,
                         "esmfold",
                         esm_commands,
+                        timeout_seconds=context.config.scoring.esm.timeout_seconds,
                     )
                 else:
                     atomic_write_text(
@@ -3275,6 +3351,20 @@ def run_pipeline(
             ),
         )
         return final_rows
+    except KeyboardInterrupt:
+        message = "pipeline interrupted by user"
+        interrupted_stage = active_stage
+        for stage, status in tuple(manifest.stage_status.items()):
+            if status == "running":
+                manifest.stage_status[stage] = "interrupted"
+        manifest.status = "interrupted"
+        if message not in manifest.errors:
+            manifest.errors.append(message)
+        manifest.write(context.manifest_path)
+        if interrupted_stage is not None:
+            finish_stage(interrupted_stage, "interrupted", message)
+        finish_pipeline("interrupted", message)
+        raise
     except Exception as exc:
         if active_stage is not None:
             finish_stage(active_stage, "error", str(exc))

@@ -158,12 +158,14 @@ def test_feature_builder_uses_in_image_gpu_mmseqs_and_exposes_search_limits(
         settings,
         target_sequence="ACDE",
         output_dir=tmp_path / "features",
+        container_name="aerith-feature-test",
     )
 
     joined = " ".join(command)
     assert settings.image == "aerith/fold-runtime:local"
     assert "aerith/fold-runtime:local prepare-features" in joined
     assert "--network none" in joined
+    assert "--name aerith-feature-test" in joined
     assert "--gpus device=0" in joined
     assert f"{database.resolve()}:/db:ro" in joined
     assert ":/opt/aerith/mmseqs:ro" not in joined

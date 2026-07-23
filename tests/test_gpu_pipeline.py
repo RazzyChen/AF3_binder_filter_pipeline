@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -7,8 +9,9 @@ import pytest
 
 from af3_binder_filter.backends import UnifiedPrediction, build_backend_command
 from af3_binder_filter.config import AerithConfig
-from af3_binder_filter.esm_tools import load_cached_esm_rows
 from af3_binder_filter.derived_structures import file_sha256
+from af3_binder_filter.esm_tools import load_cached_esm_rows
+from af3_binder_filter.execution import CommandOutcome, LocalCommandExecutor
 from af3_binder_filter.gpu import GPUInfo
 from af3_binder_filter.jobs import JobPlan, JobSpec
 from af3_binder_filter.manifest import RunManifest
@@ -121,7 +124,6 @@ def test_runtime_gpu_selection_filters_busy_and_disallowed_devices(
 
 def test_sharded_runner_preserves_negative_return_codes(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     jobs = (_job(0), _job(1))
     context = _context(tmp_path, jobs)
@@ -130,14 +132,15 @@ def test_sharded_runner_preserves_negative_return_codes(
         GpuJobShard(_gpu(2), (jobs[1],)),
     ]
 
-    def fake_run(_context, command, *, name):
-        assert name in {"prediction.gpu_0", "prediction.gpu_2"}
-        return int(command[-1])
-
-    monkeypatch.setattr(
-        "af3_binder_filter.workflow._run_prediction_command",
-        fake_run,
-    )
+    class FakeExecutor:
+        def run(self, command, *, dry_run=False):
+            assert command.name in {"prediction.gpu_0", "prediction.gpu_2"}
+            return CommandOutcome(
+                command=command,
+                returncode=int(command.argv[-1]),
+                duration_seconds=0.0,
+                dry_run=dry_run,
+            )
 
     return_codes, errors = _run_sharded_commands(
         context,
@@ -146,6 +149,7 @@ def test_sharded_runner_preserves_negative_return_codes(
             (shards[0], ["fake", "0"]),
             (shards[1], ["fake", "-9"]),
         ],
+        executor=FakeExecutor(),  # type: ignore[arg-type]
     )
 
     assert return_codes == {0: 0, 2: -9}
@@ -159,6 +163,96 @@ def test_sharded_runner_preserves_negative_return_codes(
     ).read_text()
     assert "# gpu=0 jobs=job_0" in command_log
     assert "# gpu=2 jobs=job_1" in command_log
+
+
+def test_sharded_dry_run_writes_aggregate_and_per_gpu_command_records(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, (_job(0),))
+    context.config.runtime.dry_run = True
+    shard = GpuJobShard(_gpu(0), context.plan.jobs)
+
+    return_codes, errors = _run_sharded_commands(
+        context,
+        "prediction",
+        [(shard, ["docker", "run", "image name", "argument with spaces"])],
+    )
+
+    assert return_codes == {0: 0}
+    assert errors == []
+    log_dir = context.layout.stage("primary_prediction").logs
+    aggregate = (log_dir / "prediction.command.txt").read_text()
+    per_gpu = (log_dir / "prediction.gpu_0.command.txt").read_text()
+    assert "'image name'" in aggregate
+    assert "'argument with spaces'" in per_gpu
+    assert not (log_dir / "prediction.gpu_0.stdout.log").exists()
+    assert not (log_dir / "prediction.gpu_0.stderr.log").exists()
+
+
+def test_sharded_timeout_preserves_real_signal_and_reaps_process(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, (_job(0),))
+    shard = GpuJobShard(_gpu(0), context.plan.jobs)
+    executor = LocalCommandExecutor(termination_grace_seconds=0.05)
+
+    return_codes, errors = _run_sharded_commands(
+        context,
+        "prediction",
+        [(shard, [sys.executable, "-c", "import time; time.sleep(30)"])],
+        timeout_seconds=0.05,
+        executor=executor,
+    )
+
+    assert return_codes[0] is not None and return_codes[0] < 0
+    assert len(errors) == 1 and "exceeded timeout" in errors[0]
+    assert executor.active_process_count == 0
+
+
+def test_sharded_keyboard_interrupt_cancels_every_active_process(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    jobs = (_job(0), _job(1))
+    context = _context(tmp_path, jobs)
+    shards = (
+        GpuJobShard(_gpu(0), (jobs[0],)),
+        GpuJobShard(_gpu(1), (jobs[1],)),
+    )
+    executor = LocalCommandExecutor(termination_grace_seconds=0.1)
+
+    def interrupt_after_start(*_args, **_kwargs):
+        deadline = time.monotonic() + 5.0
+        while executor.active_process_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert executor.active_process_count >= 1
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("af3_binder_filter.workflow.wait", interrupt_after_start)
+    with pytest.raises(KeyboardInterrupt):
+        _run_sharded_commands(
+            context,
+            "prediction",
+            [
+                (
+                    shard,
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                )
+                for shard in shards
+            ],
+            executor=executor,
+        )
+
+    assert executor.active_process_count == 0
+    assert executor.cancellation_requested
+    log_dir = context.layout.stage("primary_prediction").logs
+    for gpu_index in (0, 1):
+        stdout = log_dir / f"prediction.gpu_{gpu_index}.stdout.log"
+        stderr = log_dir / f"prediction.gpu_{gpu_index}.stderr.log"
+        if stdout.exists():
+            stdout.rename(log_dir / f"closed.{stdout.name}")
+        if stderr.exists():
+            stderr.rename(log_dir / f"closed.{stderr.name}")
 
 
 def test_backend_container_has_unique_name_and_one_visible_gpu(
@@ -284,6 +378,71 @@ def test_esm_stage_forwards_effective_rows_to_all_cache_and_input_helpers(
     assert seen["cache_secondary"] == (prediction,)
     assert seen["input_rows"] == [effective_rows]
     assert seen["collect_rows"] is effective_rows
+
+
+def test_esm_stage_forwards_configured_timeout_to_shard_executor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    job = _job(0)
+    context = _context(tmp_path, (job,))
+    context.config.scoring.esm.enabled = True
+    context.config.scoring.esm.esmfold = True
+    context.config.scoring.esm.inverse_folding = False
+    context.config.scoring.esm.timeout_seconds = 321
+    model = tmp_path / "effective-timeout.cif"
+    model.write_text("model")
+    prediction = UnifiedPrediction(
+        job.job_id,
+        "alphafold3",
+        "success",
+        best_model_path=model,
+    )
+    seen_timeouts: list[float | None] = []
+
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.load_cached_esm_rows",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.write_esm_inputs",
+        lambda *_args, **_kwargs: (
+            tmp_path / "binders.fasta",
+            tmp_path / "esm_if_jobs.json",
+        ),
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow._runtime_gpus",
+        lambda *_args, **_kwargs: [_gpu(0)],
+    )
+
+    def run_shards(_context, _name, _commands, **kwargs):
+        seen_timeouts.append(kwargs.get("timeout_seconds"))
+        return {0: 0}, []
+
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow._run_sharded_commands",
+        run_shards,
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.workflow.collect_esm_rows",
+        lambda *_args, **_kwargs: [
+            {
+                "job_name": job.job_id,
+                "esmfold_status": "success",
+                "esm_if_status": "not_available",
+            }
+        ],
+    )
+
+    _rows, failed = esm_stage(
+        context,
+        (prediction,),
+        _manifest(context),
+    )
+
+    assert failed is False
+    assert seen_timeouts == [321]
 
 
 def test_esm_cache_requires_complete_parseable_outputs(tmp_path: Path) -> None:

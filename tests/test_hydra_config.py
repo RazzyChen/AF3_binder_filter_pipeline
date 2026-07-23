@@ -120,6 +120,15 @@ def test_geometry_and_deprecated_purity_validation() -> None:
     assert any("minimum_epitope_purity is no longer supported" in item for item in report.errors)
 
 
+def test_esm_timeout_must_be_positive() -> None:
+    config = AerithConfig()
+    config.scoring.esm.timeout_seconds = 0
+
+    report = validate_hydra_config(config, check_paths=False)
+
+    assert "scoring.esm.timeout_seconds must be at least 1" in report.errors
+
+
 def test_database_validation_uses_configured_names_and_environment_switch(
     tmp_path: Path,
 ) -> None:
@@ -460,6 +469,7 @@ def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(tmp_path: Path) -> Non
     )
     assert " aerith/fold-runtime:local prepare-features " not in feature_command
     assert "--use-gpu 1" in feature_command
+    assert "--name aerith-" in feature_command
     assert "GPU MMseqs2 preprocessing" in prediction_command
     assert {path.name for path in context.results_dir.glob("*.csv")} == {
         "all_results.csv",
