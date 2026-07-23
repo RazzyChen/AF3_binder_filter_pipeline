@@ -433,6 +433,8 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         errors.append("interface.distance must be positive")
     if config.interface.geometry_engine != "biotite":
         errors.append("interface.geometry_engine must be biotite")
+    if config.interface.energy_engine not in {"none", "rosetta_cli"}:
+        errors.append("interface.energy_engine must be none or rosetta_cli")
     if config.interface.minimum_contact_pairs < 1:
         errors.append("interface.minimum_contact_pairs must be at least 1")
     if config.interface.sasa_point_number < 1:

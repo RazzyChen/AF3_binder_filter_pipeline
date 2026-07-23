@@ -104,7 +104,7 @@ def test_runtime_gpu_selection_filters_busy_and_disallowed_devices(
     context.config.runtime.gpu_ids = [0, 2, 3]
     context.config.runtime.gpu_busy_threshold_mib = 100
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.query_gpus",
+        "af3_binder_filter.orchestration.context.query_gpus",
         lambda: [
             GPUInfo(0, "allowed", 2, 24576),
             GPUInfo(1, "not-allowed", 2, 24576),
@@ -228,7 +228,10 @@ def test_sharded_keyboard_interrupt_cancels_every_active_process(
         assert executor.active_process_count >= 1
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("af3_binder_filter.workflow.wait", interrupt_after_start)
+    monkeypatch.setattr(
+        "af3_binder_filter.orchestration.command_runtime.wait",
+        interrupt_after_start,
+    )
     with pytest.raises(KeyboardInterrupt):
         _run_sharded_commands(
             context,
@@ -304,7 +307,7 @@ def test_clustering_stage_forwards_effective_rows_to_foldseek_staging(
         raise WiringObserved
 
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.prepare_foldseek_inputs",
+        "af3_binder_filter.orchestration.clustering_stage.prepare_foldseek_inputs",
         capture,
     )
     with pytest.raises(WiringObserved):
@@ -350,15 +353,15 @@ def test_esm_stage_forwards_effective_rows_to_all_cache_and_input_helpers(
         return [{"job_name": job.job_id, "esm_status": "disabled"}]
 
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.load_cached_esm_rows",
+        "af3_binder_filter.orchestration.esm_stage.load_cached_esm_rows",
         cache_loader,
     )
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.write_esm_inputs",
+        "af3_binder_filter.orchestration.esm_stage.write_esm_inputs",
         input_writer,
     )
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.collect_esm_rows",
+        "af3_binder_filter.orchestration.esm_stage.collect_esm_rows",
         collector,
     )
 
@@ -401,18 +404,18 @@ def test_esm_stage_forwards_configured_timeout_to_shard_executor(
     seen_timeouts: list[float | None] = []
 
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.load_cached_esm_rows",
+        "af3_binder_filter.orchestration.esm_stage.load_cached_esm_rows",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.write_esm_inputs",
+        "af3_binder_filter.orchestration.esm_stage.write_esm_inputs",
         lambda *_args, **_kwargs: (
             tmp_path / "binders.fasta",
             tmp_path / "esm_if_jobs.json",
         ),
     )
     monkeypatch.setattr(
-        "af3_binder_filter.workflow._runtime_gpus",
+        "af3_binder_filter.orchestration.esm_stage._runtime_gpus",
         lambda *_args, **_kwargs: [_gpu(0)],
     )
 
@@ -421,11 +424,11 @@ def test_esm_stage_forwards_configured_timeout_to_shard_executor(
         return {0: 0}, []
 
     monkeypatch.setattr(
-        "af3_binder_filter.workflow._run_sharded_commands",
+        "af3_binder_filter.orchestration.esm_stage._run_sharded_commands",
         run_shards,
     )
     monkeypatch.setattr(
-        "af3_binder_filter.workflow.collect_esm_rows",
+        "af3_binder_filter.orchestration.esm_stage.collect_esm_rows",
         lambda *_args, **_kwargs: [
             {
                 "job_name": job.job_id,

@@ -4,6 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import af3_binder_filter.workflow as workflow
+import af3_binder_filter.orchestration.context as workflow_context
+import af3_binder_filter.orchestration.pipeline as pipeline_workflow
+import af3_binder_filter.orchestration.prediction_stage as prediction_workflow
+import af3_binder_filter.orchestration.resume as resume_workflow
 import pytest
 from typer.testing import CliRunner
 from af3_binder_filter.backends import UnifiedPrediction
@@ -129,8 +133,12 @@ def test_matching_secondary_job_manifest_has_no_pending_job(
         def parse(self, _job, _output_root):
             return prediction
 
-    monkeypatch.setattr(workflow, "output_adapter", lambda _name: Adapter())
-    monkeypatch.setattr(workflow, "structure_has_chains", lambda *_args: True)
+    monkeypatch.setattr(prediction_workflow, "output_adapter", lambda _name: Adapter())
+    monkeypatch.setattr(
+        prediction_workflow,
+        "structure_has_chains",
+        lambda *_args: True,
+    )
     output_root = tmp_path / "outputs"
     fingerprint = _backend_job_fingerprint(
         context, job, "secondary-features", backend
@@ -215,8 +223,12 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
         def parse(self, _job, _output_root):
             return prediction
 
-    monkeypatch.setattr(workflow, "output_adapter", lambda _name: Adapter())
-    monkeypatch.setattr(workflow, "structure_has_chains", lambda *_args: True)
+    monkeypatch.setattr(prediction_workflow, "output_adapter", lambda _name: Adapter())
+    monkeypatch.setattr(
+        prediction_workflow,
+        "structure_has_chains",
+        lambda *_args: True,
+    )
     output_root = tmp_path / "outputs"
     write_job_manifest(
         output_root / job.job_id,
@@ -286,11 +298,15 @@ def test_standalone_loader_accepts_prediction_stage_fingerprint(
         def parse(self, _job, _output_root):
             return prediction
 
-    monkeypatch.setattr(workflow, "output_adapter", lambda _name: Adapter())
-    monkeypatch.setattr(workflow, "structure_has_chains", lambda *_args: True)
+    monkeypatch.setattr(resume_workflow, "output_adapter", lambda _name: Adapter())
     monkeypatch.setattr(
-        workflow,
-        "_expected_feature_fingerprint",
+        resume_workflow,
+        "structure_has_chains",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        resume_workflow,
+        "_primary_prediction_feature_identity",
         lambda *_args: "primary-features",
     )
     output_root = tmp_path / "outputs" / "run" / "alphafold3"
@@ -375,7 +391,7 @@ def _run_overrides(tmp_path: Path, *extra: str) -> list[str]:
 def test_primary_only_context_records_all_resolved_image_and_source_ids(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -400,7 +416,7 @@ def test_pipeline_keyboard_interrupt_is_persisted_and_re_raised(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -410,7 +426,7 @@ def test_pipeline_keyboard_interrupt_is_persisted_and_re_raised(
     def interrupt(_context):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(workflow, "prepare_features_stage", interrupt)
+    monkeypatch.setattr(pipeline_workflow, "prepare_features_stage", interrupt)
     with pytest.raises(KeyboardInterrupt):
         workflow.run_pipeline(context)
 
@@ -423,7 +439,7 @@ def test_pipeline_keyboard_interrupt_is_persisted_and_re_raised(
 def test_explicit_run_id_rejects_fingerprint_change_before_any_write(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     config_path = _run_config(tmp_path)
     overrides = _run_overrides(tmp_path, "project.run_id=fixed-run")
     context = create_run_context(config_path, overrides=overrides, dry_run=True)
@@ -446,7 +462,7 @@ def test_explicit_run_id_rejects_fingerprint_change_before_any_write(
 def test_explicit_run_id_rejects_nonempty_directory_without_manifest(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     config_path = _run_config(tmp_path)
     run_dir = tmp_path / "results" / "orphan-run"
     run_dir.mkdir(parents=True)
@@ -470,7 +486,7 @@ def test_explicit_run_id_rejects_nonempty_directory_without_manifest(
 def test_standalone_cluster_rejects_tampered_candidate_artifact(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -523,7 +539,7 @@ def test_standalone_cluster_rejects_tampered_candidate_artifact(
 def test_stale_configured_image_id_is_rejected_before_run_directory_write(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     results = tmp_path / "results"
 
     with pytest.raises(PipelineExecutionError, match="does not match actual image ID"):
@@ -542,7 +558,7 @@ def test_stale_configured_image_id_is_rejected_before_run_directory_write(
 def test_malformed_keyed_manifest_is_rejected_without_overwrite(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     config_path = _run_config(tmp_path)
     overrides = _run_overrides(tmp_path, "project.run_id=malformed-run")
     context = create_run_context(config_path, overrides=overrides, dry_run=True)
@@ -562,7 +578,7 @@ def test_malformed_keyed_manifest_is_rejected_without_overwrite(
 def test_stale_job_fingerprint_value_is_rejected_without_overwrite(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     config_path = _run_config(tmp_path)
     overrides = _run_overrides(tmp_path, "project.run_id=stale-job-run")
     context = create_run_context(config_path, overrides=overrides, dry_run=True)
@@ -583,7 +599,7 @@ def test_stale_job_fingerprint_value_is_rejected_without_overwrite(
 def test_resolved_config_sha_is_verified_before_resume_overwrite(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     config_path = _run_config(tmp_path)
     overrides = _run_overrides(tmp_path, "project.run_id=config-tamper")
     context = create_run_context(config_path, overrides=overrides, dry_run=True)
@@ -602,7 +618,7 @@ def test_resolved_config_sha_is_verified_before_resume_overwrite(
 def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -647,7 +663,7 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
 def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -686,7 +702,7 @@ def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mut
 def test_pipeline_resume_preserves_existing_manifest_artifacts(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -705,7 +721,7 @@ def test_pipeline_resume_preserves_existing_manifest_artifacts(
 def test_prepared_feature_content_is_bound_to_run_manifest(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
@@ -756,7 +772,7 @@ def test_prepared_feature_content_is_bound_to_run_manifest(
 def test_standalone_cluster_rejects_wrong_job_membership_without_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(workflow, "resolve_docker_image_id", _stable_image_id)
+    monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
         overrides=_run_overrides(tmp_path),
