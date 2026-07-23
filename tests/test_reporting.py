@@ -172,6 +172,18 @@ def test_decision_and_review_reports_have_v3_schemas_and_normalized_contacts(
 
 
 def test_layout_creates_all_numbered_stage_folders(tmp_path: Path) -> None:
+    assert list(STAGE_DIRECTORIES.values()) == [
+        "01_preflight",
+        "02_features",
+        "03_primary_prediction",
+        "04_primary_interface",
+        "05_secondary_features",
+        "06_secondary_prediction",
+        "07_secondary_interface",
+        "08_consensus",
+        "09_esm",
+        "10_clustering",
+    ]
     layout = RunOutputLayout(tmp_path).ensure()
     assert {path.name for path in layout.stages_root.iterdir()} == set(
         STAGE_DIRECTORIES.values()

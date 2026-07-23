@@ -13,11 +13,11 @@ STAGE_DIRECTORIES: dict[str, str] = {
     "features": "02_features",
     "primary_prediction": "03_primary_prediction",
     "primary_interface": "04_primary_interface",
-    "esm": "05_esm",
-    "secondary_features": "06_secondary_features",
-    "secondary_prediction": "07_secondary_prediction",
-    "secondary_interface": "08_secondary_interface",
-    "consensus": "09_consensus",
+    "secondary_features": "05_secondary_features",
+    "secondary_prediction": "06_secondary_prediction",
+    "secondary_interface": "07_secondary_interface",
+    "consensus": "08_consensus",
+    "esm": "09_esm",
     "clustering": "10_clustering",
 }
 
