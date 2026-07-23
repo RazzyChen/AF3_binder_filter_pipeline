@@ -10,9 +10,11 @@ small foundation for gradually moving stage execution out of ``workflow.py``.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import signal as signal_module
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -172,6 +174,19 @@ class CommandOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class CancellationReport:
+    """Summary of one collective cancellation request."""
+
+    requested: int
+    term_signalled: int
+    kill_signalled: int
+    reaped: int
+    still_running: int
+    cleaned_containers: tuple[str, ...] = ()
+    cleanup_errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionEvent:
     """Presentation-neutral event emitted at stage and shard boundaries."""
 
@@ -195,7 +210,15 @@ class Executor(Protocol):
 
 
 PopenFactory = Callable[..., subprocess.Popen[str]]
+CleanupRunner = Callable[..., subprocess.CompletedProcess[str]]
 Clock = Callable[[], float]
+
+
+@dataclass(slots=True)
+class _ActiveProcess:
+    process: subprocess.Popen[str]
+    command: CommandSpec
+    cleanup_claimed: bool = False
 
 
 def _signal_from_returncode(returncode: int | None) -> int | None:
@@ -229,6 +252,61 @@ class LocalCommandExecutor:
         self._popen = popen_factory
         self._clock = clock
         self._event_sink = event_sink
+        self._registry_lock = threading.RLock()
+        self._cancel_lock = threading.Lock()
+        self._active_processes: dict[subprocess.Popen[str], _ActiveProcess] = {}
+        self._cancellation_requested = False
+
+    @property
+    def active_process_count(self) -> int:
+        """Number of commands currently owned by this executor."""
+
+        with self._registry_lock:
+            return len(self._active_processes)
+
+    @property
+    def cancellation_requested(self) -> bool:
+        """Whether this stage-scoped executor rejects new process starts."""
+
+        with self._cancel_lock:
+            return self._cancellation_requested
+
+    def reset_cancellation(self) -> None:
+        """Allow new starts after a completed cancellation barrier.
+
+        Resetting while a process is registered could let new work overlap a
+        stage that is still unwinding, so it is rejected deterministically.
+        """
+
+        with self._cancel_lock:
+            if self.active_process_count:
+                raise RuntimeError("cannot reset cancellation while processes are active")
+            self._cancellation_requested = False
+
+    def _register_process(
+        self,
+        process: subprocess.Popen[str],
+        command: CommandSpec,
+    ) -> _ActiveProcess:
+        record = _ActiveProcess(process=process, command=command)
+        with self._registry_lock:
+            self._active_processes[process] = record
+        return record
+
+    def _unregister_process(self, process: subprocess.Popen[str]) -> None:
+        with self._registry_lock:
+            self._active_processes.pop(process, None)
+
+    def _active_snapshot(self) -> tuple[_ActiveProcess, ...]:
+        with self._registry_lock:
+            return tuple(self._active_processes.values())
+
+    def _record_for_process(
+        self,
+        process: subprocess.Popen[str],
+    ) -> _ActiveProcess | None:
+        with self._registry_lock:
+            return self._active_processes.get(process)
 
     def _emit(
         self,
@@ -262,33 +340,139 @@ class LocalCommandExecutor:
         atomic_write_text(command.command_path, shlex.join(command.argv) + "\n")
 
     @staticmethod
-    def _send_signal(process: subprocess.Popen[str], signal_number: int) -> None:
+    def _send_signal(process: subprocess.Popen[str], signal_number: int) -> bool:
         if os.name == "posix":
             try:
                 # start_new_session=True makes the child PID its process-group
                 # ID, so descendants launched by Docker wrappers are included.
                 os.killpg(process.pid, signal_number)
-                return
+                return True
             except ProcessLookupError:
-                return
+                return False
             except (OSError, PermissionError):
                 # Fall back to the direct child if process-group signalling is
                 # unavailable (for example in a restricted test environment).
                 pass
         try:
             process.send_signal(signal_number)
+            return True
         except ProcessLookupError:
-            return
+            return False
+
+    @staticmethod
+    def _process_running(record: _ActiveProcess) -> bool:
+        try:
+            return record.process.poll() is None
+        except (ChildProcessError, ProcessLookupError):
+            return False
+
+    @classmethod
+    def _wait_for_records(
+        cls,
+        records: Sequence[_ActiveProcess],
+        *,
+        timeout_seconds: float,
+    ) -> tuple[_ActiveProcess, ...]:
+        """Wait for a group against one shared deadline, not N timeouts."""
+
+        pending = [record for record in records if cls._process_running(record)]
+        deadline = time.monotonic() + timeout_seconds
+        while pending:
+            pending = [record for record in pending if cls._process_running(record)]
+            if not pending:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                pending[0].process.wait(timeout=min(0.05, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+            except (ChildProcessError, ProcessLookupError):
+                continue
+        return tuple(record for record in pending if cls._process_running(record))
+
+    def _claim_cleanup(
+        self,
+        records: Sequence[_ActiveProcess],
+    ) -> tuple[_ActiveProcess, ...]:
+        claimed: list[_ActiveProcess] = []
+        with self._registry_lock:
+            for record in records:
+                if record.cleanup_claimed:
+                    continue
+                record.cleanup_claimed = True
+                claimed.append(record)
+        return tuple(claimed)
+
+    def _cleanup_cancelled_processes(
+        self,
+        records: Sequence[_ActiveProcess],
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Backend-specific cleanup hook called at most once per process."""
+
+        return (), ()
+
+    def _cancel_records_locked(
+        self,
+        records: Sequence[_ActiveProcess],
+    ) -> CancellationReport:
+        unique_records = tuple(dict.fromkeys(record.process for record in records))
+        by_process = {record.process: record for record in records}
+        ordered = tuple(by_process[process] for process in unique_records)
+        targets = tuple(record for record in ordered if self._process_running(record))
+
+        term_signalled = sum(
+            self._send_signal(record.process, signal_module.SIGTERM) for record in targets
+        )
+        remaining = self._wait_for_records(
+            targets,
+            timeout_seconds=self.termination_grace_seconds,
+        )
+        kill_signalled = sum(
+            self._send_signal(record.process, signal_module.SIGKILL) for record in remaining
+        )
+        remaining = self._wait_for_records(
+            remaining,
+            timeout_seconds=self.termination_grace_seconds,
+        )
+        remaining_processes = {record.process for record in remaining}
+
+        for record in ordered:
+            if record.process not in remaining_processes:
+                self._unregister_process(record.process)
+
+        cleanup_records = self._claim_cleanup(targets)
+        cleaned_containers, cleanup_errors = self._cleanup_cancelled_processes(cleanup_records)
+        return CancellationReport(
+            requested=len(ordered),
+            term_signalled=term_signalled,
+            kill_signalled=kill_signalled,
+            reaped=len(ordered) - len(remaining),
+            still_running=len(remaining),
+            cleaned_containers=cleaned_containers,
+            cleanup_errors=cleanup_errors,
+        )
+
+    def cancel_all(self) -> CancellationReport:
+        """Cancel, reap, and unregister every command active at call time.
+
+        Cancellation calls are serialized, while command registration and
+        completion remain concurrent.  TERM and KILL are broadcast before each
+        bounded wait so cancellation latency is independent of shard count.
+        """
+
+        with self._cancel_lock:
+            self._cancellation_requested = True
+            return self._cancel_records_locked(self._active_snapshot())
 
     def _terminate_process_group(self, process: subprocess.Popen[str]) -> int | None:
-        if process.poll() is not None:
+        with self._cancel_lock:
+            record = self._record_for_process(process)
+            if record is None:
+                return process.returncode
+            self._cancel_records_locked((record,))
             return process.returncode
-        self._send_signal(process, signal_module.SIGTERM)
-        try:
-            return process.wait(timeout=self.termination_grace_seconds)
-        except subprocess.TimeoutExpired:
-            self._send_signal(process, signal_module.SIGKILL)
-            return process.wait()
 
     @staticmethod
     def _append_lifecycle_error(handle: TextIO, message: str) -> None:
@@ -337,7 +521,33 @@ class LocalCommandExecutor:
                 popen_kwargs["start_new_session"] = True
 
             try:
-                process = self._popen(list(command.argv), **popen_kwargs)
+                # Starting and registering share the cancellation lock.  A
+                # concurrent cancel_all() therefore sees either no process yet
+                # or the fully registered process, never an untracked child.
+                cancelled = False
+                with self._cancel_lock:
+                    if self._cancellation_requested:
+                        cancelled = True
+                    else:
+                        process = self._popen(list(command.argv), **popen_kwargs)
+                        self._register_process(process, command)
+                if cancelled:
+                    error = "executor cancellation is active; command was not started"
+                    self._append_lifecycle_error(stderr, error)
+                    outcome = CommandOutcome(
+                        command=command,
+                        returncode=None,
+                        duration_seconds=max(0.0, self._clock() - started),
+                        error=error,
+                    )
+                    self._emit(
+                        "command_finished",
+                        command,
+                        status=outcome.status,
+                        duration_seconds=outcome.duration_seconds,
+                        detail=error,
+                    )
+                    return outcome
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 error = f"failed to start command: {type(exc).__name__}: {exc}"
                 self._append_lifecycle_error(stderr, error)
@@ -357,61 +567,67 @@ class LocalCommandExecutor:
                 return outcome
 
             try:
-                if command.timeout_seconds is None:
-                    returncode = process.wait()
-                else:
-                    returncode = process.wait(timeout=command.timeout_seconds)
-            except subprocess.TimeoutExpired:
-                returncode = self._terminate_process_group(process)
-                error = f"exceeded timeout of {command.timeout_seconds:g} seconds"
-                self._append_lifecycle_error(stderr, error)
+                try:
+                    if command.timeout_seconds is None:
+                        returncode = process.wait()
+                    else:
+                        returncode = process.wait(timeout=command.timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    returncode = self._terminate_process_group(process)
+                    error = f"exceeded timeout of {command.timeout_seconds:g} seconds"
+                    self._append_lifecycle_error(stderr, error)
+                    outcome = CommandOutcome(
+                        command=command,
+                        returncode=returncode,
+                        duration_seconds=max(0.0, self._clock() - started),
+                        timed_out=True,
+                        signal=_signal_from_returncode(returncode),
+                        error=error,
+                    )
+                    self._emit(
+                        "command_timed_out",
+                        command,
+                        status=outcome.status,
+                        returncode=returncode,
+                        duration_seconds=outcome.duration_seconds,
+                        detail=error,
+                    )
+                    return outcome
+                except KeyboardInterrupt:
+                    returncode = self._terminate_process_group(process)
+                    duration = max(0.0, self._clock() - started)
+                    self._append_lifecycle_error(
+                        stderr,
+                        "interrupted; process group terminated",
+                    )
+                    self._emit(
+                        "command_interrupted",
+                        command,
+                        status="interrupted",
+                        returncode=returncode,
+                        duration_seconds=duration,
+                    )
+                    raise
+                except BaseException:
+                    self._terminate_process_group(process)
+                    raise
+
                 outcome = CommandOutcome(
                     command=command,
                     returncode=returncode,
                     duration_seconds=max(0.0, self._clock() - started),
-                    timed_out=True,
                     signal=_signal_from_returncode(returncode),
-                    error=error,
                 )
                 self._emit(
-                    "command_timed_out",
+                    "command_finished",
                     command,
                     status=outcome.status,
                     returncode=returncode,
                     duration_seconds=outcome.duration_seconds,
-                    detail=error,
                 )
                 return outcome
-            except KeyboardInterrupt:
-                returncode = self._terminate_process_group(process)
-                duration = max(0.0, self._clock() - started)
-                self._append_lifecycle_error(stderr, "interrupted; process group terminated")
-                self._emit(
-                    "command_interrupted",
-                    command,
-                    status="interrupted",
-                    returncode=returncode,
-                    duration_seconds=duration,
-                )
-                raise
-            except BaseException:
-                self._terminate_process_group(process)
-                raise
-
-        outcome = CommandOutcome(
-            command=command,
-            returncode=returncode,
-            duration_seconds=max(0.0, self._clock() - started),
-            signal=_signal_from_returncode(returncode),
-        )
-        self._emit(
-            "command_finished",
-            command,
-            status=outcome.status,
-            returncode=returncode,
-            duration_seconds=outcome.duration_seconds,
-        )
-        return outcome
+            finally:
+                self._unregister_process(process)
 
 
 class LocalDockerExecutor(LocalCommandExecutor):
@@ -423,11 +639,15 @@ class LocalDockerExecutor(LocalCommandExecutor):
         docker_executable: str = "docker",
         termination_grace_seconds: float = 10.0,
         popen_factory: PopenFactory = subprocess.Popen,
+        cleanup_runner: CleanupRunner = subprocess.run,
+        cleanup_timeout_seconds: float = 30.0,
         clock: Clock = time.monotonic,
         event_sink: EventSink | None = None,
     ) -> None:
         if not docker_executable:
             raise ValueError("docker_executable must not be empty")
+        if cleanup_timeout_seconds <= 0:
+            raise ValueError("cleanup_timeout_seconds must be greater than zero")
         super().__init__(
             termination_grace_seconds=termination_grace_seconds,
             popen_factory=popen_factory,
@@ -435,6 +655,69 @@ class LocalDockerExecutor(LocalCommandExecutor):
             event_sink=event_sink,
         )
         self.docker_executable = docker_executable
+        self._cleanup_runner = cleanup_runner
+        self.cleanup_timeout_seconds = cleanup_timeout_seconds
+
+    _CONTAINER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+    def _named_run_container(self, command: CommandSpec) -> str | None:
+        argv = command.argv
+        if len(argv) < 3 or Path(argv[0]).name != Path(self.docker_executable).name:
+            return None
+        if argv[1] != "run":
+            return None
+        names: list[str] = []
+        index = 2
+        while index < len(argv):
+            argument = argv[index]
+            if argument == "--name":
+                if index + 1 >= len(argv):
+                    return None
+                names.append(argv[index + 1])
+                index += 2
+                continue
+            if argument.startswith("--name="):
+                names.append(argument.partition("=")[2])
+            index += 1
+        if len(names) != 1 or self._CONTAINER_NAME.fullmatch(names[0]) is None:
+            return None
+        return names[0]
+
+    def _cleanup_cancelled_processes(
+        self,
+        records: Sequence[_ActiveProcess],
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        names = tuple(
+            sorted(
+                {
+                    name
+                    for record in records
+                    if (name := self._named_run_container(record.command)) is not None
+                }
+            )
+        )
+        cleaned: list[str] = []
+        errors: list[str] = []
+        for name in names:
+            command = [self.docker_executable, "rm", "-f", name]
+            try:
+                completed = self._cleanup_runner(
+                    command,
+                    shell=False,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.cleanup_timeout_seconds,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                continue
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()
+                errors.append(f"{name}: docker rm returned {completed.returncode}: {detail}")
+                continue
+            cleaned.append(name)
+        return tuple(cleaned), tuple(errors)
 
     def run(self, command: CommandSpec, *, dry_run: bool = False) -> CommandOutcome:
         actual = Path(command.argv[0]).name
