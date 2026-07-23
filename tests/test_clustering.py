@@ -37,7 +37,7 @@ def test_epitope_clusters_ignore_binder_fold_and_are_deterministic() -> None:
     assert qualified["a"] != qualified["c"]
 
 
-def test_foldseek_parser_keeps_raw_representative_and_singletons(tmp_path: Path) -> None:
+def test_foldseek_parser_keeps_raw_representative_without_fake_singletons(tmp_path: Path) -> None:
     tsv = tmp_path / "cluster.tsv"
     tsv.write_text("a.pdb\ta.pdb\na.pdb\tb.pdb\n")
 
@@ -49,7 +49,7 @@ def test_foldseek_parser_keeps_raw_representative_and_singletons(tmp_path: Path)
 
     assert membership["a"] == membership["b"]
     assert raw[membership["a"]] == "a"
-    assert membership["c"] != membership["a"]
+    assert "c" not in membership
 
 
 def test_foldseek_clustering_uses_in_image_gpu_binary(tmp_path: Path) -> None:
@@ -97,8 +97,8 @@ def test_foldseek_clustering_rejects_host_binary_path(tmp_path: Path) -> None:
 def test_quality_representative_and_all_cluster_outputs(tmp_path: Path) -> None:
     jobs = [_job("a", "ACDE"), _job("b", "FGHI")]
     rows = [
-        {"job_name": "a", "final_pass": False, "iptm": 0.9, "target_interface_residues": "1,2"},
-        {"job_name": "b", "final_pass": True, "iptm": 0.8, "target_interface_residues": "1,2"},
+        {"job_name": "a", "final_pass": False, "effective_iptm": 0.9, "effective_target_interface_residues": "1,2"},
+        {"job_name": "b", "final_pass": True, "effective_iptm": 0.8, "effective_target_interface_residues": "1,2"},
     ]
     membership = {"a": "cluster_1", "b": "cluster_1"}
 
@@ -143,9 +143,8 @@ def test_secondary_only_rescue_is_kept_in_final_shortlist(tmp_path: Path) -> Non
             "final_pass": False,
             "secondary_final_pass": True,
             "candidate_pool": True,
-            "epitope_coverage": 0.0,
-            "secondary_epitope_coverage": 1 / 3,
-            "target_interface_residues": "1,2",
+            "effective_epitope_coverage": 1 / 3,
+            "effective_target_interface_residues": "1,2",
         }
     ]
     membership = {"secondary_rescue": "cluster_1"}

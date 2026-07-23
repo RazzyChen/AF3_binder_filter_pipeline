@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-OUTPUT_SCHEMA_VERSION = 2
+OUTPUT_SCHEMA_VERSION = 3
 
 STAGE_DIRECTORIES: dict[str, str] = {
     "preflight": "01_preflight",
@@ -74,6 +74,10 @@ class RunOutputLayout:
     @property
     def final_shortlist(self) -> Path:
         return self.root / "final_shortlist.csv"
+
+    @property
+    def backend_review(self) -> Path:
+        return self.root / "backend_review.csv"
 
     def canonical_stage_name(self, name: str) -> str:
         canonical = RUNTIME_STAGE_ALIASES.get(name, name)

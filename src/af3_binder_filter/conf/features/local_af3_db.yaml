@@ -1,5 +1,4 @@
 name: local_af3_db
-enabled: true
 image: aerith/fold-runtime:local
 image_id: null
 docker_bin: docker

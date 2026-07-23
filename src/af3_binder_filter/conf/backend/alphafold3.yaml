@@ -1,4 +1,3 @@
-enabled: true
 name: alphafold3
 model: alphafold3
 image: aerith/fold-runtime:local

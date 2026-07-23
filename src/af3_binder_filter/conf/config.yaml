@@ -26,6 +26,7 @@ runtime:
   force: false
   gpu_ids: []
   gpu_busy_threshold_mib: 100
+  geometry_max_workers: 4
   dockerfile: docker/runtime/Dockerfile
   af3_source_dir: /home/structure/Software/alphafold3-3.0.3
   protenix_source_dir: /home/structure/Software/Protenix-2.0.0
@@ -49,7 +50,6 @@ scoring:
     run_on: all
     inverse_folding: true
     esmfold: true
-    hard_filter: false
     runtime_entry_if: esm-if
     runtime_entry_fold: esmfold
     model_cache: /home/structure/.cache/torch/hub/checkpoints
@@ -69,7 +69,7 @@ consensus:
   target_alignment_max_iterations: 3
   same_fold_tm_threshold: 0.50
   different_pose_rmsd_threshold: 5.0
-  hard_filter: false
+  explicit_different_interface_pair_jaccard: 0.30
 
 hydra:
   job:

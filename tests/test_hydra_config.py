@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from af3_binder_filter.cli import app
 from af3_binder_filter.config import (
+    AerithConfig,
     ConfigError,
     compose_hydra_config,
     validate_hydra_config,
@@ -72,7 +73,13 @@ def test_minimal_production_config_composes_with_structured_defaults(
 
     config, _resolved = compose_hydra_config(config_path)
     assert config.backend.name == "alphafold3"
+    assert not hasattr(config.backend, "enabled")
     assert config.secondary_backend.name == "opendde"
+    assert config.secondary_backend.enabled is True
+    assert not hasattr(config.features, "enabled")
+    assert not hasattr(config.scoring.esm, "hard_filter")
+    assert not hasattr(config.consensus, "hard_filter")
+    assert config.consensus.explicit_different_interface_pair_jaccard == 0.30
     assert config.secondary_backend.checkpoint_path.endswith("/opendde.pt")
     assert config.project.csv_path == str(csv_path.resolve())
     assert config.project.work_dir == str(project_root.resolve() / "work")
@@ -86,6 +93,89 @@ def test_minimal_production_config_composes_with_structured_defaults(
     assert config.interface.minimum_epitope_coverage == 0.30
     assert config.interface.minimum_epitope_purity is None
     assert validate_hydra_config(config, check_paths=False).ok
+
+
+def test_removed_legacy_commands_are_not_registered() -> None:
+    registered = {command.name for command in app.registered_commands}
+
+    assert registered == {
+        "analyze-interface",
+        "build-runtime-image",
+        "cluster",
+        "pipeline",
+        "prepare-features",
+    }
+
+
+def test_geometry_and_deprecated_purity_validation() -> None:
+    config = AerithConfig()
+    config.interface.geometry_engine = "unsupported"
+    report = validate_hydra_config(config, check_paths=False)
+    assert "interface.geometry_engine must be biotite" in report.errors
+    assert any("minimum_epitope_purity is deprecated" in item for item in report.warnings)
+
+    config.interface.geometry_engine = "biotite"
+    config.interface.minimum_epitope_purity = 0.30
+    report = validate_hydra_config(config, check_paths=False)
+    assert any("minimum_epitope_purity is no longer supported" in item for item in report.errors)
+
+
+def test_database_validation_uses_configured_names_and_environment_switch(
+    tmp_path: Path,
+) -> None:
+    config = AerithConfig()
+    config.project.csv_path = str(_csv(tmp_path / "input.csv"))
+    config.backend.model_dir = str(tmp_path / "models")
+    Path(config.backend.model_dir).mkdir()
+    config.scoring.esm.enabled = False
+    config.interface.energy_engine = "none"
+
+    database = tmp_path / "database"
+    mmseqs = database / "custom_mmseqs"
+    mmseqs.mkdir(parents=True)
+    config.features.database_dir = str(database)
+    config.features.mmseqs_dir = str(mmseqs)
+    config.features.primary_database = "custom_primary"
+    config.features.environment_database = "custom_environment"
+    config.features.template_database = "custom_template"
+    config.features.use_environment_database = False
+    config.features.pdb_seqres_fasta = str(database / "custom_templates.fasta")
+    config.features.mmcif_dir = str(database / "custom_mmcif")
+    (mmseqs / "custom_primary").write_text("db")
+    (mmseqs / "custom_template").write_text("db")
+    Path(config.features.pdb_seqres_fasta).write_text(">x\nA\n")
+    Path(config.features.mmcif_dir).mkdir()
+
+    report = validate_hydra_config(config)
+    assert report.ok, report.errors
+    assert not any("custom_environment" in item for item in report.errors)
+
+    config.features.use_environment_database = True
+    report = validate_hydra_config(config)
+    assert any("custom_environment" in item for item in report.errors)
+
+
+def test_missing_configured_rosetta_is_an_error(tmp_path: Path) -> None:
+    config = AerithConfig()
+    config.project.csv_path = str(_csv(tmp_path / "input.csv"))
+    config.backend.model_dir = str(tmp_path / "models")
+    Path(config.backend.model_dir).mkdir()
+    config.scoring.esm.enabled = False
+    database = _database(tmp_path / "database")
+    config.features.database_dir = str(database)
+    config.features.mmseqs_dir = str(database / "mmseqs")
+    config.features.pdb_seqres_fasta = str(
+        database / "pdb_seqres_2022_09_28.fasta"
+    )
+    config.features.mmcif_dir = str(database / "mmcif_files")
+    config.interface.rosetta.binary = str(tmp_path / "missing_rosetta")
+    config.interface.rosetta.database = str(tmp_path / "missing_rosetta_database")
+
+    report = validate_hydra_config(config)
+
+    assert any("Rosetta binary does not exist" in item for item in report.errors)
+    assert any("Rosetta database does not exist" in item for item in report.errors)
+    assert not any("Rosetta" in item for item in report.warnings)
 
 
 def test_minimal_production_config_accepts_cli_only_field_overrides(
@@ -237,7 +327,7 @@ def test_dry_run_resolved_config_matches_manifest_backend(tmp_path: Path) -> Non
     ).read_text()
     assert manifest["backend"] == "alphafold3"
     assert manifest["fingerprint"] == context.fingerprint
-    assert manifest["output_schema_version"] == 2
+    assert manifest["output_schema_version"] == 3
     assert "secondary_backend:" in resolved
     assert "name: opendde" in resolved
     assert "--network none" in command
@@ -369,6 +459,7 @@ def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(tmp_path: Path) -> Non
     assert "GPU MMseqs2 preprocessing" in prediction_command
     assert {path.name for path in context.results_dir.glob("*.csv")} == {
         "all_results.csv",
+        "backend_review.csv",
         "candidates.csv",
         "final_shortlist.csv",
     }

@@ -243,6 +243,8 @@ def collect_esm_rows(
     jobs: Sequence[JobSpec],
     predictions: Sequence[UnifiedPrediction],
     output_dir: Path,
+    *,
+    comparison_label: str = "effective",
 ) -> list[dict[str, Any]]:
     inverse = _read_csv(output_dir / "esm_if.csv")
     by_prediction = {prediction.job_id: prediction for prediction in predictions}
@@ -269,9 +271,55 @@ def collect_esm_rows(
                     _chain_ca(prediction.best_model_path, job.binder_chain),
                     _chain_ca(pdb),
                 )
-                row["esmfold_af3_binder_rmsd"] = rmsd
-                row["esmfold_af3_binder_tm"] = tm
+                row[f"esmfold_{comparison_label}_binder_rmsd"] = rmsd
+                row[f"esmfold_{comparison_label}_binder_tm"] = tm
             except Exception as exc:
                 row["esmfold_comparison_error"] = str(exc)
         rows.append(row)
     return rows
+
+
+def add_esmfold_backend_comparison(
+    rows: Sequence[dict[str, Any]],
+    jobs: Sequence[JobSpec],
+    predictions: Sequence[UnifiedPrediction],
+    output_dir: Path,
+    *,
+    label: str,
+) -> list[dict[str, Any]]:
+    """Add a cheap ESMFold-to-backend fold comparison to existing ESM rows."""
+
+    by_row = {str(row.get("job_name")): dict(row) for row in rows}
+    by_prediction = {prediction.job_id: prediction for prediction in predictions}
+    for job in jobs:
+        row = by_row[job.job_id]
+        header = f"{job.job_id}_chain_{job.binder_chain}"
+        pdb = next(
+            (
+                path
+                for path in (
+                    output_dir / "esmfold" / f"{header}.pdb",
+                    output_dir / "esmfold" / f"{job.job_id}.pdb",
+                )
+                if path.is_file()
+            ),
+            None,
+        )
+        prediction = by_prediction.get(job.job_id)
+        if (
+            pdb is None
+            or prediction is None
+            or prediction.status != "success"
+            or prediction.best_model_path is None
+        ):
+            continue
+        try:
+            rmsd, tm = _fold_comparison(
+                _chain_ca(prediction.best_model_path, job.binder_chain),
+                _chain_ca(pdb),
+            )
+            row[f"esmfold_{label}_binder_rmsd"] = rmsd
+            row[f"esmfold_{label}_binder_tm"] = tm
+        except Exception as exc:
+            row[f"esmfold_{label}_comparison_error"] = str(exc)
+    return [by_row[job.job_id] for job in jobs]

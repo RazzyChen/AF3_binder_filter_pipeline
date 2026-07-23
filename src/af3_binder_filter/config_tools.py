@@ -373,14 +373,19 @@ def doctor_config(
         except (OSError, subprocess.SubprocessError) as exc:
             (errors if required else warnings).append(f"{label} check failed: {exc}")
 
-    for label, executable in (
-        ("Rosetta", config.interface.rosetta.binary),
-    ):
+    if config.interface.energy_engine == "rosetta_cli":
+        executable = config.interface.rosetta.binary
         resolved = shutil.which(executable) if "/" not in executable else executable
         if not resolved or not Path(resolved).is_file():
-            warnings.append(f"{label} executable not found: {executable}")
+            errors.append(f"Rosetta executable not found: {executable}")
         else:
-            info.append(f"{label}: {resolved}")
+            info.append(f"Rosetta: {resolved}")
+
+        rosetta_database = Path(config.interface.rosetta.database).expanduser()
+        if not rosetta_database.is_dir():
+            errors.append(f"Rosetta database not found: {rosetta_database}")
+        else:
+            info.append(f"Rosetta database: {rosetta_database}")
 
     database = Path(config.features.database_dir)
     try:

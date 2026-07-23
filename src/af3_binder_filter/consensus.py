@@ -256,6 +256,14 @@ def add_anomaly_flags(
                 and (_number(row.get("consensus_epitope_jaccard")) or 0.0)
                 < settings.explicit_different_epitope_jaccard
             )
+            pair_jaccard = _number(
+                row.get("consensus_interface_pair_jaccard")
+            )
+            different_contact_pairs = (
+                pair_jaccard is not None
+                and pair_jaccard
+                < settings.explicit_different_interface_pair_jaccard
+            )
             fold_tm = _number(row.get("consensus_binder_fold_tm"))
             fixed_frame_rmsd = _number(
                 row.get("consensus_binder_fixed_frame_rmsd")
@@ -265,9 +273,7 @@ def add_anomaly_flags(
                 and fold_tm < settings.same_fold_tm_threshold
             )
             different_pose = (
-                fold_tm is not None
-                and fold_tm >= settings.same_fold_tm_threshold
-                and fixed_frame_rmsd is not None
+                fixed_frame_rmsd is not None
                 and fixed_frame_rmsd > settings.different_pose_rmsd_threshold
             )
             row["consensus_anomaly_metric_count"] = len(flags)
@@ -276,23 +282,29 @@ def add_anomaly_flags(
                 f"{key}={value:.3g}" for key, value in sorted(z_values.items())
             )
             row["consensus_explicit_different_epitope"] = explicit
+            row["consensus_different_interface_pairs"] = different_contact_pairs
             row["consensus_different_binder_fold"] = different_fold
             row["consensus_different_pose"] = different_pose
             robust_anomaly = len(flags) >= settings.minimum_anomaly_metrics
             row["manual_review"] = (
-                explicit or different_fold or different_pose or robust_anomaly
+                explicit
+                or different_contact_pairs
+                or different_fold
+                or different_pose
+                or robust_anomaly
             )
+            review_reasons: list[str] = []
             if explicit:
-                review_reason = "different_epitope"
-            elif different_fold:
-                review_reason = "different_binder_fold"
-            elif different_pose:
-                review_reason = "different_pose"
-            elif robust_anomaly:
-                review_reason = "robust_multimetric_anomaly"
-            else:
-                review_reason = ""
-            row["manual_review_reason"] = review_reason
+                review_reasons.append("different_epitope")
+            if different_contact_pairs:
+                review_reasons.append("contact_pair_disagreement")
+            if different_fold:
+                review_reasons.append("different_binder_fold")
+            if different_pose:
+                review_reasons.append("different_pose")
+            if robust_anomaly:
+                review_reasons.append("robust_multimetric_anomaly")
+            row["manual_review_reason"] = ";".join(review_reasons)
             row["consensus_cohort"] = cohort
             row["consensus_cohort_size"] = len(usable)
     return rows

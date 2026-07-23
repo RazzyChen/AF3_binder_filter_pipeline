@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from af3_binder_filter.backends import UnifiedPrediction, build_backend_command
@@ -51,17 +52,25 @@ def _context(tmp_path: Path, jobs: tuple[JobSpec, ...]) -> RunContext:
     )
 
 
-def test_gpu_job_shards_are_deterministic_round_robin() -> None:
-    jobs = tuple(_job(index) for index in range(7))
+def test_gpu_job_shards_use_deterministic_weighted_lpt() -> None:
+    jobs = tuple(
+        replace(_job(index), binder_sequence="A" * length)
+        for index, length in enumerate((40, 30, 20, 10, 8, 6, 4))
+    )
 
     shards = plan_gpu_job_shards(jobs, [_gpu(0), _gpu(2), _gpu(3)])
 
-    assert [[job.job_id for job in shard.jobs] for shard in shards] == [
-        ["job_0", "job_3", "job_6"],
-        ["job_1", "job_4"],
-        ["job_2", "job_5"],
-    ]
+    assignments = [[job.job_id for job in shard.jobs] for shard in shards]
+    repeated = plan_gpu_job_shards(jobs, [_gpu(0), _gpu(2), _gpu(3)])
+    assert assignments == [[job.job_id for job in shard.jobs] for shard in repeated]
     assert [shard.gpu.index for shard in shards] == [0, 2, 3]
+    lpt_max = max(shard.estimated_cost for shard in shards)
+    round_robin = [jobs[index::3] for index in range(3)]
+    round_robin_max = max(
+        sum((len(job.target_sequence) + len(job.binder_sequence)) ** 2 for job in bucket)
+        for bucket in round_robin
+    )
+    assert lpt_max <= round_robin_max
 
 
 def test_runtime_gpu_selection_filters_busy_and_disallowed_devices(

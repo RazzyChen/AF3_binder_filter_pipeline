@@ -110,7 +110,6 @@ class ProjectSettings:
 
 @dataclass
 class BackendSettings:
-    enabled: bool = True
     name: str = "alphafold3"
     model: str = "alphafold3"
     image: str = "alphafold3:latest"
@@ -132,12 +131,22 @@ class BackendSettings:
 
 
 @dataclass
+class SecondaryBackendSettings(BackendSettings):
+    """Optional cross-validation backend settings.
+
+    Primary AlphaFold 3 execution is mandatory, so only a secondary backend
+    has a meaningful enable/disable switch.
+    """
+
+    enabled: bool = False
+
+
+@dataclass
 class ESMToolSettings:
     enabled: bool = True
     run_on: str = "all"
     inverse_folding: bool = True
     esmfold: bool = True
-    hard_filter: bool = False
     runtime_entry_if: str = "esm-if"
     runtime_entry_fold: str = "esmfold"
     model_cache: str = "/home/structure/.cache/torch/hub/checkpoints"
@@ -164,13 +173,12 @@ class ConsensusSettings:
     target_alignment_max_iterations: int = 3
     same_fold_tm_threshold: float = 0.50
     different_pose_rmsd_threshold: float = 5.0
-    hard_filter: bool = False
+    explicit_different_interface_pair_jaccard: float = 0.30
 
 
 @dataclass
 class FeatureSettings:
     name: str = "local_af3_db"
-    enabled: bool = True
     image: str = "aerith/fold-runtime:local"
     image_id: str | None = None
     docker_bin: str = "docker"
@@ -245,6 +253,7 @@ class RuntimeSettings:
     force: bool = False
     gpu_ids: list[int] = field(default_factory=list)
     gpu_busy_threshold_mib: int = 100
+    geometry_max_workers: int = 4
     dockerfile: str = "docker/runtime/Dockerfile"
     af3_source_dir: str = "/home/structure/Software/alphafold3-3.0.3"
     protenix_source_dir: str = "/home/structure/Software/Protenix-2.0.0"
@@ -271,8 +280,8 @@ class RuntimeSettings:
 class AerithConfig:
     project: ProjectSettings = field(default_factory=ProjectSettings)
     backend: BackendSettings = field(default_factory=BackendSettings)
-    secondary_backend: BackendSettings = field(
-        default_factory=lambda: BackendSettings(
+    secondary_backend: SecondaryBackendSettings = field(
+        default_factory=lambda: SecondaryBackendSettings(
             enabled=False,
             name="none",
             model="none",
@@ -422,6 +431,8 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         errors.append("project.limit must be at least 1")
     if config.interface.distance <= 0:
         errors.append("interface.distance must be positive")
+    if config.interface.geometry_engine != "biotite":
+        errors.append("interface.geometry_engine must be biotite")
     if config.interface.minimum_contact_pairs < 1:
         errors.append("interface.minimum_contact_pairs must be at least 1")
     if config.interface.sasa_point_number < 1:
@@ -438,6 +449,8 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         errors.append("features.iterations must be at least 1")
     if config.features.timeout_seconds < 1:
         errors.append("features.timeout_seconds must be at least 1")
+    if config.runtime.geometry_max_workers < 1:
+        errors.append("runtime.geometry_max_workers must be at least 1")
     expected_rosetta_interface = f"{project.target_chain}_{project.binder_chain}"
     if (
         config.interface.energy_engine == "rosetta_cli"
@@ -447,9 +460,18 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
             "interface.rosetta.interface must match configured chains: "
             f"expected {expected_rosetta_interface}"
         )
+    if config.interface.minimum_epitope_purity is None:
+        warnings.append(
+            "interface.minimum_epitope_purity is deprecated and has no effect; "
+            "remove it from configuration"
+        )
+    else:
+        errors.append(
+            "interface.minimum_epitope_purity is no longer supported; "
+            "only epitope coverage is used for filtering"
+        )
     for name, value in (
         ("minimum_epitope_coverage", config.interface.minimum_epitope_coverage),
-        ("minimum_epitope_purity", config.interface.minimum_epitope_purity),
         ("binder_tm_threshold", config.clustering.binder_tm_threshold),
         ("binder_coverage", config.clustering.binder_coverage),
         ("multimer_tm_threshold", config.clustering.multimer_tm_threshold),
@@ -495,6 +517,10 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         )
     if not 0 <= config.consensus.same_fold_tm_threshold <= 1:
         errors.append("consensus.same_fold_tm_threshold must be between 0 and 1")
+    if not 0 <= config.consensus.explicit_different_interface_pair_jaccard <= 1:
+        errors.append(
+            "consensus.explicit_different_interface_pair_jaccard must be between 0 and 1"
+        )
     if config.consensus.different_pose_rmsd_threshold <= 0:
         errors.append("consensus.different_pose_rmsd_threshold must be positive")
     if config.runtime.minimum_build_free_gib < 1:
@@ -508,14 +534,17 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         if not database_dir.is_dir():
             errors.append(f"features.database_dir does not exist: {database_dir}")
         else:
-            required = (
-                database_dir / "mmseqs" / "uniref90_padded",
-                database_dir / "mmseqs" / "mgnify_padded",
-                database_dir / "mmseqs" / "small_bfd_padded",
-                database_dir / "mmseqs" / "pdb_seqres_padded",
-                database_dir / "pdb_seqres_2022_09_28.fasta",
-                database_dir / "mmcif_files",
-            )
+            mmseqs_dir = Path(config.features.mmseqs_dir).expanduser()
+            required = [
+                mmseqs_dir / config.features.primary_database,
+                mmseqs_dir / config.features.template_database,
+                Path(config.features.pdb_seqres_fasta).expanduser(),
+                Path(config.features.mmcif_dir).expanduser(),
+            ]
+            if config.features.use_environment_database:
+                required.append(
+                    mmseqs_dir / config.features.environment_database
+                )
             for required_path in required:
                 if not required_path.exists():
                     errors.append(f"required AF3 database path does not exist: {required_path}")
@@ -523,9 +552,9 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
             binary = Path(config.interface.rosetta.binary).expanduser()
             database = Path(config.interface.rosetta.database).expanduser()
             if not binary.is_file():
-                warnings.append(f"Rosetta binary does not exist: {binary}")
+                errors.append(f"Rosetta binary does not exist: {binary}")
             if not database.is_dir():
-                warnings.append(f"Rosetta database does not exist: {database}")
+                errors.append(f"Rosetta database does not exist: {database}")
         if config.backend.source_dir:
             source = Path(config.backend.source_dir).expanduser()
             if not source.is_dir():

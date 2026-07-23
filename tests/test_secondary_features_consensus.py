@@ -208,7 +208,9 @@ def test_multimetric_robust_anomaly_is_review_only() -> None:
     flagged = add_anomaly_flags(rows, ConsensusSettings())[-1]
 
     assert flagged["manual_review"] is True
-    assert flagged["manual_review_reason"] == "robust_multimetric_anomaly"
+    assert flagged["manual_review_reason"] == (
+        "different_pose;robust_multimetric_anomaly"
+    )
     assert flagged["candidate_pool"] is True
 
 
@@ -239,8 +241,8 @@ def test_small_cohort_still_flags_explicit_fold_and_pose_disagreement() -> None:
     fold, pose = add_anomaly_flags(rows, ConsensusSettings())
 
     assert fold["consensus_different_binder_fold"] is True
-    assert fold["consensus_different_pose"] is False
-    assert fold["manual_review_reason"] == "different_binder_fold"
+    assert fold["consensus_different_pose"] is True
+    assert fold["manual_review_reason"] == "different_binder_fold;different_pose"
     assert pose["consensus_different_binder_fold"] is False
     assert pose["consensus_different_pose"] is True
     assert pose["manual_review_reason"] == "different_pose"

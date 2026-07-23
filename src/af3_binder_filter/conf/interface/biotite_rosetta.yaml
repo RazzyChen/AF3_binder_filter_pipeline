@@ -5,7 +5,6 @@ distance: 5.0
 epitope_residues: null
 minimum_contact_pairs: 5
 minimum_epitope_coverage: 0.30
-minimum_epitope_purity: null
 sasa_point_number: 1000
 rosetta:
   binary: /home/structure/Software/rosetta.source.release-408/main/source/bin/InterfaceAnalyzer.mpiserialization.linuxgccrelease

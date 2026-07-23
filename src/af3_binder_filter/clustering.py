@@ -245,12 +245,10 @@ def parse_foldseek_clusters(
                 )
                 membership[member] = cluster_id
                 raw_representatives[cluster_id] = representative
-    for job_id in sorted(set(all_job_ids)):
-        if job_id not in membership:
-            cluster_id = f"{prefix}_{len(representative_to_cluster) + 1:04d}"
-            membership[job_id] = cluster_id
-            raw_representatives[cluster_id] = job_id
-            representative_to_cluster[job_id] = cluster_id
+    # Do not manufacture singleton clusters for structures that never reached
+    # Foldseek or disappeared from its output.  Callers compare ``all_job_ids``
+    # with the returned membership and propagate the missing jobs as errors.
+    _ = all_job_ids
     return membership, raw_representatives
 
 
@@ -326,11 +324,11 @@ def quality_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
 
     return (
         not _selection_pass(row),
-        desc("epitope_coverage"),
-        asc("interface_pae_mean"),
-        asc("rosetta_dG_separated_per_dSASA_x100"),
-        desc("rosetta_packstat"),
-        desc("iptm"),
+        desc("effective_epitope_coverage"),
+        asc("effective_interface_pae_mean"),
+        asc("effective_rosetta_dG_separated_per_dSASA_x100"),
+        desc("effective_rosetta_packstat"),
+        desc("effective_iptm"),
         str(row.get("job_name", "")),
     )
 
@@ -445,6 +443,8 @@ def write_cluster_outputs(
             row.get("complex_cluster"),
             row.get("epitope_cluster"),
         )
+        if any(value in (None, "") for value in cell):
+            continue
         cells.setdefault(cell, []).append(row)
     final_shortlist = [
         min(cell_rows, key=quality_key)

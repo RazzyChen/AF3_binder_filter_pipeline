@@ -104,11 +104,11 @@ def test_stage_plan_is_dynamic() -> None:
         "features",
         "primary_prediction",
         "primary_interface",
-        "esm",
         "secondary_features",
         "secondary_prediction",
         "secondary_interface",
         "consensus",
+        "esm",
         "clustering",
     ]
 

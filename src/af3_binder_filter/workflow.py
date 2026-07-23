@@ -92,7 +92,9 @@ from af3_binder_filter.secondary_features import SecondaryFeatureBundle
 from af3_binder_filter.secondary_features import adapt_af3_features_for_secondary
 from af3_binder_filter.secondary_features import adapt_local_features_for_secondary
 from af3_binder_filter.consensus import consensus_rows
+from af3_binder_filter.effective import apply_effective_backend
 from af3_binder_filter.esm_tools import (
+    add_esmfold_backend_comparison,
     build_esm_if_container_command,
     build_esmfold_container_command,
     collect_esm_rows,
@@ -135,12 +137,23 @@ class GpuJobShard:
     gpu: GPUInfo
     jobs: tuple[JobSpec, ...]
 
+    @property
+    def estimated_cost(self) -> int:
+        return sum(_job_estimated_cost(job) for job in self.jobs)
+
+
+def _job_estimated_cost(job: JobSpec) -> int:
+    """A stable, model-agnostic proxy for fold inference work."""
+
+    total_residues = len(job.target_sequence) + len(job.binder_sequence)
+    return total_residues * total_residues
+
 
 def plan_gpu_job_shards(
     jobs: Sequence[JobSpec],
     gpus: Sequence[GPUInfo],
 ) -> list[GpuJobShard]:
-    """Round-robin jobs across GPUs, using at most one container per GPU."""
+    """Balance jobs using deterministic longest-processing-time assignment."""
 
     if not jobs:
         return []
@@ -148,8 +161,12 @@ def plan_gpu_job_shards(
     if not selected:
         raise PipelineExecutionError("jobs are pending but no free GPU is available")
     buckets: list[list[JobSpec]] = [[] for _ in selected]
-    for index, job in enumerate(jobs):
-        buckets[index % len(selected)].append(job)
+    loads = [0] * len(selected)
+    ordered = sorted(jobs, key=lambda job: (-_job_estimated_cost(job), job.job_id))
+    for job in ordered:
+        index = min(range(len(selected)), key=lambda value: (loads[value], selected[value].index))
+        buckets[index].append(job)
+        loads[index] += _job_estimated_cost(job)
     return [
         GpuJobShard(gpu, tuple(bucket))
         for gpu, bucket in zip(selected, buckets, strict=True)
@@ -214,6 +231,7 @@ def _record_gpu_assignments(
         {
             "gpu_index": shard.gpu.index,
             "jobs": [job.job_id for job in shard.jobs],
+            "estimated_cost": shard.estimated_cost,
         }
         for shard in shards
     ]
@@ -319,8 +337,6 @@ def _pipeline_stage_specs(config: AerithConfig) -> tuple[StageSpec, ...]:
         StageSpec("primary_prediction", "Primary prediction"),
         StageSpec("primary_interface", "Primary interface analysis"),
     ]
-    if config.scoring.esm.enabled:
-        stages.append(StageSpec("esm", "ESMFold / ESM-IF scoring"))
     if config.secondary_backend.enabled:
         stages.extend(
             (
@@ -330,11 +346,11 @@ def _pipeline_stage_specs(config: AerithConfig) -> tuple[StageSpec, ...]:
             )
         )
     stages.extend(
-        (
-            StageSpec("consensus", "Backend consensus"),
-            StageSpec("clustering", "Foldseek / epitope clustering"),
-        )
+        (StageSpec("consensus", "Backend consensus / effective selection"),)
     )
+    if config.scoring.esm.enabled:
+        stages.append(StageSpec("esm", "Effective ESMFold / ESM-IF scoring"))
+    stages.append(StageSpec("clustering", "Foldseek / epitope clustering"))
     return tuple(stages)
 
 
@@ -1370,8 +1386,9 @@ def interface_stage(
     )
     geometry_success = 0
     geometry_failed = 0
-    for job, prediction in zip(active_jobs, predictions, strict=True):
-        geometry_by_job[job.job_id] = analyze_interface_geometry(
+
+    def run_geometry(job: JobSpec, prediction: UnifiedPrediction) -> tuple[str, dict[str, Any]]:
+        return job.job_id, analyze_interface_geometry(
             job,
             prediction,
             distance=context.config.interface.distance,
@@ -1379,19 +1396,32 @@ def interface_stage(
             sasa_point_number=context.config.interface.sasa_point_number,
             rosetta_input_dir=rosetta_input_dir,
         )
-        if geometry_by_job[job.job_id].get("interface_status") == "success":
-            geometry_success += 1
-        else:
-            geometry_failed += 1
-        reporter.task_progress(
-            stage_name,
-            geometry_task,
-            completed=geometry_success + geometry_failed,
-            total=len(active_jobs),
-            success=geometry_success,
-            failed=geometry_failed,
-            detail=eligibility,
-        )
+
+    worker_count = min(
+        context.config.runtime.geometry_max_workers,
+        max(1, len(active_jobs)),
+    )
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = {
+            pool.submit(run_geometry, job, prediction): job.job_id
+            for job, prediction in zip(active_jobs, predictions, strict=True)
+        }
+        for future in as_completed(futures):
+            job_id, result = future.result()
+            geometry_by_job[job_id] = result
+            if result.get("interface_status") == "success":
+                geometry_success += 1
+            else:
+                geometry_failed += 1
+            reporter.task_progress(
+                stage_name,
+                geometry_task,
+                completed=geometry_success + geometry_failed,
+                total=len(active_jobs),
+                success=geometry_success,
+                failed=geometry_failed,
+                detail=eligibility,
+            )
     reporter.task_finished(
         stage_name,
         geometry_task,
@@ -1506,6 +1536,19 @@ def interface_stage(
     return ranked
 
 
+def _interface_stage_failed(
+    rows: Sequence[dict[str, Any]], *, energy_engine: str
+) -> bool:
+    """Propagate both geometry and configured energy-substage failures."""
+
+    for row in rows:
+        if row.get("interface_status") != "success":
+            return True
+        if energy_engine == "rosetta_cli" and row.get("rosetta_status") != "success":
+            return True
+    return False
+
+
 def clustering_stage(
     context: RunContext,
     predictions: Sequence[UnifiedPrediction],
@@ -1542,52 +1585,69 @@ def clustering_stage(
     complex_prefix = foldseek_result_dir / "complex"
     binder_cluster_tsv = Path(str(binder_prefix) + "_cluster.tsv")
     complex_cluster_tsv = Path(str(complex_prefix) + "_cluster.tsv")
-    gpu = _runtime_gpus(
+    requested_workers = min(2, context.config.clustering.max_workers)
+    gpus = _runtime_gpus(
         context,
-        job_count=1,
+        job_count=requested_workers,
         stage_name="clustering",
-    )[0]
+    )
+    binder_gpu = gpus[0]
+    complex_gpu = gpus[1] if len(gpus) > 1 else gpus[0]
     if manifest is not None:
         _record_gpu_assignments(
             manifest,
             context.manifest_path,
             "clustering",
-            [GpuJobShard(gpu, active_jobs)],
+            [
+                GpuJobShard(binder_gpu, active_jobs),
+                GpuJobShard(complex_gpu, active_jobs),
+            ],
         )
     binder_command = build_foldseek_container_command(
         context.config.clustering,
         layer="binder",
         docker_bin=context.config.backend.docker_bin,
         image=context.config.backend.image,
-        gpu_index=gpu.index,
+        gpu_index=binder_gpu.index,
         input_dir=binder_dir,
         execution_dir=foldseek_result_dir,
-        container_name=_container_name(context, "foldseek-binder", gpu.index),
+        container_name=_container_name(context, "foldseek-binder", binder_gpu.index),
     )
     complex_command = build_foldseek_container_command(
         context.config.clustering,
         layer="complex",
         docker_bin=context.config.backend.docker_bin,
         image=context.config.backend.image,
-        gpu_index=gpu.index,
+        gpu_index=complex_gpu.index,
         input_dir=complex_dir,
         execution_dir=foldseek_result_dir,
-        container_name=_container_name(context, "foldseek-complex", gpu.index),
+        container_name=_container_name(context, "foldseek-complex", complex_gpu.index),
     )
-    binder_run = run_foldseek_command(
-        "binder",
-        binder_command,
-        binder_cluster_tsv,
-        dry_run=context.config.runtime.dry_run,
-        log_dir=stage_layout.logs,
-    )
-    complex_run = run_foldseek_command(
-        "complex",
-        complex_command,
-        complex_cluster_tsv,
-        dry_run=context.config.runtime.dry_run,
-        log_dir=stage_layout.logs,
-    )
+
+    def execute_foldseek(
+        layer: str, command: Sequence[str], cluster_tsv: Path
+    ):
+        return run_foldseek_command(
+            layer,
+            command,
+            cluster_tsv,
+            dry_run=context.config.runtime.dry_run,
+            log_dir=stage_layout.logs,
+        )
+
+    if len(gpus) > 1 and context.config.clustering.max_workers > 1:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            binder_future = pool.submit(
+                execute_foldseek, "binder", binder_command, binder_cluster_tsv
+            )
+            complex_future = pool.submit(
+                execute_foldseek, "complex", complex_command, complex_cluster_tsv
+            )
+            binder_run = binder_future.result()
+            complex_run = complex_future.result()
+    else:
+        binder_run = execute_foldseek("binder", binder_command, binder_cluster_tsv)
+        complex_run = execute_foldseek("complex", complex_command, complex_cluster_tsv)
     atomic_write_json(
         stage_layout.logs / "clustering_commands.json",
         {
@@ -1615,18 +1675,37 @@ def clustering_stage(
         prefix="complex",
     )
     contacts = {
-        str(row["job_name"]): row.get("target_interface_residues", "")
+        str(row["job_name"]): row.get("effective_target_interface_residues", "")
         for row in rows
     }
     epitope_membership, epitope_raw = greedy_epitope_clusters(
         contacts,
         threshold=context.config.clustering.epitope_jaccard_threshold,
     )
+    missing_ids: set[str] = set()
+    if not context.config.runtime.dry_run:
+        missing_ids = set(all_job_ids) - (
+            set(binder_membership) & set(complex_membership)
+        )
+    cluster_rows: list[dict[str, Any]] = []
+    for source in rows:
+        row = dict(source)
+        if str(row.get("job_name")) in missing_ids:
+            reasons = {
+                reason
+                for reason in str(row.get("manual_review_reason", "")).split(";")
+                if reason
+            }
+            reasons.add("clustering_input_or_output_missing")
+            row["manual_review"] = True
+            row["manual_review_reason"] = ";".join(sorted(reasons))
+            row["clustering_status"] = "error"
+        cluster_rows.append(row)
     member_rows, representative_rows, final_rows = write_cluster_outputs(
         results_dir=stage_layout.tables,
         artifacts_dir=stage_layout.artifacts,
         jobs=active_jobs,
-        rows=rows,
+        rows=cluster_rows,
         binder_membership=binder_membership,
         binder_raw_representatives=binder_raw,
         complex_membership=complex_membership,
@@ -1635,7 +1714,11 @@ def clustering_stage(
         epitope_raw_representatives=epitope_raw,
     )
     return ClusteringOutcome(
-        failed=binder_run.status == "error" or complex_run.status == "error",
+        failed=(
+            binder_run.status == "error"
+            or complex_run.status == "error"
+            or bool(missing_ids)
+        ),
         member_rows=tuple(member_rows),
         representative_rows=tuple(representative_rows),
         final_rows=tuple(final_rows),
@@ -1647,9 +1730,11 @@ def esm_stage(
     predictions: Sequence[UnifiedPrediction],
     manifest: RunManifest,
     *,
+    primary_predictions: Sequence[UnifiedPrediction] = (),
+    secondary_predictions: Sequence[UnifiedPrediction] = (),
     reporter: PipelineProgressReporter | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Run ESMFold for every binder, then ESM-IF for valid AF3 complexes."""
+    """Run ESMFold and score each sequence on its effective backbone."""
 
     reporter = reporter or NullProgressReporter()
     if not context.config.scoring.esm.enabled:
@@ -1782,7 +1867,6 @@ def esm_stage(
                     prediction_output_dir=(
                         Path(context.config.project.output_dir)
                         / context.run_id
-                        / context.config.backend.name
                     ),
                     gpu_index=shard.gpu.index,
                     container_name=_container_name(
@@ -1947,7 +2031,28 @@ def esm_stage(
             failed=len(inverse_jobs) - inverse_success,
             detail=inverse_detail,
         )
-    rows = collect_esm_rows(context.plan.jobs, predictions, output_dir)
+    rows = collect_esm_rows(
+        context.plan.jobs,
+        predictions,
+        output_dir,
+        comparison_label="effective",
+    )
+    if primary_predictions:
+        rows = add_esmfold_backend_comparison(
+            rows,
+            context.plan.jobs,
+            primary_predictions,
+            output_dir,
+            label="primary",
+        )
+    if secondary_predictions:
+        rows = add_esmfold_backend_comparison(
+            rows,
+            context.plan.jobs,
+            secondary_predictions,
+            output_dir,
+            label="secondary",
+        )
     if context.config.scoring.esm.esmfold:
         failed |= any(row.get("esmfold_status") != "success" for row in rows)
     expected_if = {
@@ -1970,6 +2075,42 @@ def _merge_rows_by_job(
     return [{**row, **by_job.get(str(row["job_name"]), {})} for row in rows]
 
 
+def _optional_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _effective_predictions_from_rows(
+    jobs: Sequence[JobSpec], rows: Sequence[dict[str, Any]]
+) -> list[UnifiedPrediction]:
+    """Materialize the selected backend as the one-structure adapter contract."""
+
+    by_job = {str(row["job_name"]): row for row in rows}
+    predictions: list[UnifiedPrediction] = []
+    for job in jobs:
+        row = by_job[job.job_id]
+        status = row.get("effective_status")
+        path_value = row.get("effective_best_model_path")
+        predictions.append(
+            UnifiedPrediction(
+                job_id=job.job_id,
+                backend=str(row.get("effective_backend") or "none"),
+                status="success" if status == "success" and path_value else "missing",
+                best_model_path=Path(str(path_value)) if path_value else None,
+                ranking_score=_optional_float(row.get("effective_ranking_score")),
+                iptm=_optional_float(row.get("effective_iptm")),
+                ptm=_optional_float(row.get("effective_ptm")),
+                plddt=_optional_float(row.get("effective_plddt_global_mean")),
+                error=None if path_value else "no eligible effective backend",
+                fingerprint_valid=bool(path_value),
+            )
+        )
+    return predictions
+
+
 def _final_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     def number(name: str, default: float) -> float:
         try:
@@ -1978,28 +2119,20 @@ def _final_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
         except (TypeError, ValueError):
             return default
 
-    primary_pae = number("primary_interface_pae_mean", math.inf)
-    secondary_pae = number("secondary_interface_pae_mean", primary_pae)
-    primary_dg = number("primary_rosetta_dG_separated_per_dSASA_x100", math.inf)
-    secondary_dg = number("secondary_rosetta_dG_separated_per_dSASA_x100", primary_dg)
-    primary_packstat = number("primary_rosetta_packstat", -math.inf)
-    secondary_packstat = number("secondary_rosetta_packstat", primary_packstat)
-    primary_iptm = number("primary_iptm", number("iptm", -math.inf))
-    secondary_iptm = number("secondary_iptm", primary_iptm)
     return (
         0 if row.get("candidate_pool") else 1,
-        -max(number("primary_epitope_coverage", -1), number("secondary_epitope_coverage", -1)),
+        -number("effective_epitope_coverage", -1),
         -number("consensus_epitope_jaccard", -1),
         -number("consensus_interface_pair_jaccard", -1),
         -number("consensus_interface_lddt", -1),
         number("consensus_interface_fixed_frame_rmsd", math.inf),
-        max(primary_pae, secondary_pae),
-        max(primary_dg, secondary_dg),
-        -min(primary_packstat, secondary_packstat),
-        -min(primary_iptm, secondary_iptm),
+        number("effective_interface_pae_mean", math.inf),
+        number("effective_rosetta_dG_separated_per_dSASA_x100", math.inf),
+        -number("effective_rosetta_packstat", -math.inf),
+        -number("effective_iptm", -math.inf),
         -number("esm_if_log_likelihood", -math.inf),
         -number("esmfold_plddt", -math.inf),
-        -number("ranking_score", -math.inf),
+        -number("effective_ranking_score", -math.inf),
         str(row.get("job_name", "")),
     )
 
@@ -2368,8 +2501,9 @@ def run_pipeline(
             write_outputs=True,
             reporter=reporter,
         )
-        primary_interface_failed = any(
-            row.get("interface_status") != "success" for row in primary_rows
+        primary_interface_failed = _interface_stage_failed(
+            primary_rows,
+            energy_engine=context.config.interface.energy_engine,
         )
         manifest.stage_status["primary_interface"] = (
             "partial" if primary_interface_failed else "success"
@@ -2379,30 +2513,6 @@ def run_pipeline(
             manifest.stage_status["primary_interface"],
         )
         required_failure |= primary_interface_failed
-
-        if context.config.scoring.esm.enabled:
-            start_stage("esm")
-            manifest.stage_status["esm"] = "running"
-            manifest.write(context.manifest_path)
-            esm_rows, esm_failed = esm_stage(
-                context,
-                primary_predictions,
-                manifest,
-                reporter=reporter,
-            )
-            manifest.stage_status["esm"] = (
-                "partial" if esm_failed else "success"
-            )
-            finish_stage("esm", manifest.stage_status["esm"])
-        else:
-            esm_rows, esm_failed = esm_stage(
-                context,
-                primary_predictions,
-                manifest,
-            )
-            manifest.stage_status["esm"] = "disabled"
-        primary_rows = _merge_rows_by_job(primary_rows, esm_rows)
-        required_failure |= esm_failed
 
         secondary_rows: list[dict[str, Any]] = []
         secondary_predictions: list[UnifiedPrediction] = []
@@ -2532,8 +2642,9 @@ def run_pipeline(
                     skipped=0,
                     detail="no eligible jobs",
                 )
-            secondary_interface_failed = any(
-                row.get("interface_status") != "success" for row in secondary_rows
+            secondary_interface_failed = _interface_stage_failed(
+                secondary_rows,
+                energy_engine=context.config.interface.energy_engine,
             )
             secondary_interface_status = (
                 "skipped"
@@ -2651,7 +2762,11 @@ def run_pipeline(
                 row["cross_validation_pass"] = None
                 row["candidate_pool"] = primary_pass
 
-        final_rows.sort(key=_final_sort_key)
+        final_rows = [apply_effective_backend(row) for row in final_rows]
+        effective_predictions = _effective_predictions_from_rows(
+            context.plan.jobs,
+            final_rows,
+        )
         candidates = [row for row in final_rows if row.get("candidate_pool")]
         manual_review = [row for row in final_rows if row.get("manual_review")]
         consensus_layout = context.layout.stage("consensus")
@@ -2663,6 +2778,34 @@ def run_pipeline(
         atomic_write_csv(consensus_layout.tables / "manual_review.csv", manual_review)
         finish_stage("consensus", manifest.stage_status["consensus"])
 
+        if context.config.scoring.esm.enabled:
+            start_stage("esm")
+            manifest.stage_status["esm"] = "running"
+            manifest.write(context.manifest_path)
+            esm_rows, esm_failed = esm_stage(
+                context,
+                effective_predictions,
+                manifest,
+                primary_predictions=primary_predictions,
+                secondary_predictions=secondary_predictions,
+                reporter=reporter,
+            )
+            manifest.stage_status["esm"] = (
+                "partial" if esm_failed else "success"
+            )
+            finish_stage("esm", manifest.stage_status["esm"])
+        else:
+            esm_rows, esm_failed = esm_stage(
+                context,
+                effective_predictions,
+                manifest,
+            )
+            manifest.stage_status["esm"] = "disabled"
+        final_rows = _merge_rows_by_job(final_rows, esm_rows)
+        final_rows.sort(key=_final_sort_key)
+        candidates = [row for row in final_rows if row.get("candidate_pool")]
+        required_failure |= esm_failed
+
         start_stage("clustering")
         manifest.stage_status["clustering"] = "running"
         manifest.write(context.manifest_path)
@@ -2670,11 +2813,11 @@ def run_pipeline(
         cluster_jobs = tuple(
             job for job in context.plan.jobs if job.job_id in candidate_ids
         )
-        primary_prediction_by_job = {
-            prediction.job_id: prediction for prediction in primary_predictions
+        effective_prediction_by_job = {
+            prediction.job_id: prediction for prediction in effective_predictions
         }
         cluster_predictions = tuple(
-            primary_prediction_by_job[job.job_id] for job in cluster_jobs
+            effective_prediction_by_job[job.job_id] for job in cluster_jobs
         )
         cluster_detail = (
             f"{len(cluster_jobs)} candidates / "
@@ -2897,7 +3040,10 @@ def run_interface_only(context: RunContext) -> list[dict[str, Any]]:
         for row in rows:
             row["candidate_pool"] = bool(row.get("final_pass"))
         write_public_reports(context.layout, rows, clustering_status="not_run")
-        failed = any(row.get("interface_status") != "success" for row in rows)
+        failed = _interface_stage_failed(
+            rows,
+            energy_engine=context.config.interface.energy_engine,
+        )
         manifest.stage_status["primary_interface"] = "partial" if failed else "success"
         manifest.status = "partial" if failed else "success"
         manifest.write(context.manifest_path)
@@ -2934,7 +3080,10 @@ def run_clustering_only(context: RunContext) -> bool:
     manifest.status = "running"
     manifest.write(context.manifest_path)
     try:
-        predictions, _base_rows = load_predictions_for_context(context)
+        # Validate the primary artifact contract before consuming the run's
+        # effective projection.  The selected structure itself may be primary
+        # or secondary and is reconstructed from the fingerprinted table.
+        load_predictions_for_context(context)
         consensus_tables = context.layout.stage("consensus").tables
         candidates_path = consensus_tables / "candidates_full.csv"
         if not candidates_path.is_file():
@@ -2947,9 +3096,10 @@ def run_clustering_only(context: RunContext) -> bool:
             in {"true", "1", "yes"}
         }
         jobs = tuple(job for job in context.plan.jobs if job.job_id in selected_ids)
-        by_prediction = {prediction.job_id: prediction for prediction in predictions}
-        selected_predictions = tuple(by_prediction[job.job_id] for job in jobs)
         selected_rows = [row for row in rows if str(row["job_name"]) in selected_ids]
+        selected_predictions = tuple(
+            _effective_predictions_from_rows(jobs, selected_rows)
+        )
         outcome = (
             clustering_stage(
                 context,
