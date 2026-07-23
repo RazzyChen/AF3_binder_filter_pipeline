@@ -146,6 +146,24 @@ under `tables/`; Rosetta inputs, ESM structures, Foldseek files, and other
 derived data under `artifacts/`. Raw backend predictions remain in
 `outputs/<run_id>/<backend>/` rather than being duplicated into `results/`.
 
+### Orchestration architecture
+
+`src/af3_binder_filter/workflow.py` is a stable compatibility facade; production
+implementation lives in the typed `orchestration/` package. `PipelineRunner`
+keeps the ten-stage transition order explicit, while `PipelineState` is the only
+object carrying mutable predictions, rows, manifest state, and clustering
+results across stage boundaries. Feature preparation, prediction, interface
+analysis, ESM, clustering, cache identity, resume validation, command execution,
+and effective selection are separate modules and can be tested independently.
+
+The stage registry owns stable names, order, progress labels, and conditional
+secondary/ESM visibility. It deliberately does not dynamically instantiate
+stages: cache recovery, failure propagation, and manifest writes remain visible
+in the runner. Factories are reserved for components with interchangeable
+implementations, currently the configured interface energy engine. The public
+`run_pipeline()` function, CLI behavior, Hydra schema, manifest/output schemas,
+and directory layout remain compatible.
+
 Target MSA and templates are built locally with GPU MMseqs2 and the configured
 AF3 database. The optional secondary backend reuses the target features. A de
 novo Binder remains query-only, with no paired MSA and no templates. Prediction

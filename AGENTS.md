@@ -48,7 +48,9 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 
 - `src/af3_binder_filter/cli.py`：Typer CLI。
 - `src/af3_binder_filter/config.py`、`config_tools.py`、`conf/`：Hydra Structured Config。
-- `src/af3_binder_filter/workflow.py`：生产 pipeline 编排。
+- `src/af3_binder_filter/workflow.py`：稳定兼容门面，不放置新的阶段实现。
+- `src/af3_binder_filter/orchestration/`：生产编排实现；`PipelineRunner` 显式执行
+  十个 stage，`PipelineState` 集中保存跨阶段状态，stage registry 固定名称、顺序和启用条件。
 - `jobs.py`、`manifest.py`、`io_utils.py`：任务身份、恢复可靠性和原子 I/O。
 - `features.py`、`secondary_features.py`：本地 MSA/template 与后端 feature contract。
 - `backends.py`：AF3/Protenix/OpenDDE adapters。
@@ -69,6 +71,10 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 执行路径；并行计算由当前 process-safe executor 和明确的 GPU shard 负责。
 
 `main.py` 是兼容入口；只有在确认所有用户都使用 `aerith` console script 后才能删除。
+
+工厂只用于真正可替换的运行组件，例如 `InterfaceEnergyEngine`；不要用动态 stage factory
+隐藏缓存恢复、manifest 更新、失败传播或进度状态。新增阶段必须先进入固定 registry，再由
+`PipelineRunner` 显式编排，并为启用条件和顺序补测试。
 
 ## 必须执行的验证
 
