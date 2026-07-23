@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import af3_binder_filter.workflow as workflow
 import pytest
 from typer.testing import CliRunner
-from af3_binder_filter.af3_runner import combined_return_code
 from af3_binder_filter.backends import UnifiedPrediction
 from af3_binder_filter.cli import app
 from af3_binder_filter.config import AerithConfig, BackendSettings
@@ -23,12 +22,6 @@ from af3_binder_filter.workflow import (
     run_clustering_only,
     secondary_gate_job_ids,
 )
-
-
-def test_negative_subprocess_return_code_is_failure() -> None:
-    assert combined_return_code([0, 0]) == 0
-    assert combined_return_code([-9, 0]) == -9
-    assert combined_return_code([0, 2]) == 2
 
 
 def test_backend_job_fingerprint_uses_actual_backend_feature_bundle() -> None:

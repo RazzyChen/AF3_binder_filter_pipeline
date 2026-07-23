@@ -292,6 +292,11 @@ from the final shortlist.
 Aerith remains a single-host, multi-GPU Docker scheduler; Kubernetes is not
 required for this execution model.
 
+The host scheduler deliberately uses bounded Python worker pools and the
+process-safe executor in this repository. It does not install Ray, Modin, or a
+second distributed scheduler. Heavy model runtimes remain isolated inside the
+unified Docker image.
+
 ### Weighted prediction sharding
 
 Pending prediction and ESM jobs are assigned with deterministic

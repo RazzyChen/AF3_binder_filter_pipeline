@@ -18,14 +18,14 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 权威设计与输出说明：
 
 - `README.md`：生产 Quick Start、镜像构建与验收记录。
-- `IMPLEMENTATION_PLAN.md`：架构和验收契约。
-- `SHORTLIST_COLUMNS.md`：三个公开 CSV 的 83 个字段。
+- `SHORTLIST_COLUMNS.md`：三个 55 列决策 CSV 与 108 列多后端审阅 CSV 的字段语义。
 
 ## 不得破坏的行为
 
 1. 单次 run 只能有一个共享 target sequence；target/binder chain 必须非空且不同。
 2. CSV 只解析一次并生成不可变 JobSpec；`limit` 必须作用于整个任务计划。
-3. job 名 sanitize 后必须唯一；空行、重复 job、target mismatch 必须显式失败。
+3. job 名 sanitize 后必须唯一；重复 job 和 target mismatch 必须显式失败。完全空白的
+   CSV 物理行按解析契约跳过，但 `source_row_number` 必须保留原文件行号，不能发生行错位。
 4. 缓存只能在 fingerprint、manifest 和可解析产物全部匹配时命中。
 5. CLI 状态文字使用 `cache hit!` 和 `cache missing!`，并显示 stage 与完成数/总数。
 6. AF3 target 使用本地 GPU MMseqs2 MSA 和本地 template；Binder 默认 query-only MSA、
@@ -33,12 +33,14 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 7. 预测/feature 容器默认 `--network none`，数据库和 checkpoint 只读挂载。
 8. 表位编号是 target 输入序列的 1-based position；公开残基字段必须包含链号，
    例如 `A:405`、`B:15`、`A:405-B:15`。
-9. 硬表位门槛只使用 coverage；purity 不过滤、不进入公开 83 列。
+9. 硬表位门槛只使用 coverage；purity 不过滤、不进入公开决策列。
 10. Rosetta 失败不得丢弃 Biotite 几何；Rosetta 默认固定随机种子以保证恢复可重复。
 11. 缺失指标保持 missing，不得用 0 代填。
 12. pipeline 可保留部分产物，但必需阶段失败时必须非零退出，除非 `allow_partial=true`。
 13. 三个 run-root CSV 必须同 schema：`all_results.csv`、`candidates.csv`、
-    `final_shortlist.csv`；详细日志/表格/产物按 `stages/01_*` 至 `stages/10_*` 保存。
+    `final_shortlist.csv`（当前 55 列 effective-only schema）；`backend_review.csv`
+    单独保存完整 108 列多后端数据。详细日志/表格/产物按 `stages/01_*` 至
+    `stages/10_*` 保存。
 14. CSV/JSON 采用临时文件和原子 rename；任意非零 subprocess return code（包括负信号）
     都是失败。
 
@@ -56,20 +58,15 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 - `docker/runtime/`：统一 runtime Dockerfile、entrypoint 和依赖 locks。
 - `docker/feature-builder/`：GPU MMseqs2/template 预处理 adapter。
 
-## 兼容代码警告
+## 生产与已退役边界
 
-下列文件名字较旧，但当前仍被 CLI、生产 workflow 或测试直接引用，未经依赖审计不得删除：
+`esmfold_score.py`、`gpu.py`、`models.py` 和 `af3_json.py` 仍属于生产调用图。
+`models.py` 只保留当前 CSV 输入所需的 `BinderCsvRow`。
 
-- `pipeline.py`
-- `esm_score.py`
-- `esmfold_score.py`
-- `gpu.py`
-- `models.py`
-- `sasa.py`
-- `sequence_metrics.py`
-- `aggregate.py`
-- `af3_json.py`
-- `af3_runner.py`
+2026-07-23 已完成引用审计并删除最早版本中不可达的
+`pipeline.py`、`esm_score.py`、`ipsae_score.py`、`aggregate.py`、
+`af3_runner.py`、`sasa.py` 和 `sequence_metrics.py`。不要恢复旧 Ray/Modin
+执行路径；并行计算由当前 process-safe executor 和明确的 GPU shard 负责。
 
 `main.py` 是兼容入口；只有在确认所有用户都使用 `aerith` console script 后才能删除。
 
@@ -123,14 +120,13 @@ K8s 逻辑直接写死在 workflow。若实验室已有 Slurm，批量科学计�
 5. 清理后运行完整测试、compileall、CLI help 和 `git diff --check`。
 6. 在提交前确认工作树中没有模型权重、数据库、真实生产输出、绝对路径配置或密钥。
 
-截至 2026-07-21 的待审阅分类：
+截至 2026-07-23 的待审阅分类：
 
 - 明确保留候选：`.gitignore`、`.dockerignore`、`pyproject.toml`、`uv.lock`、`src/`、
-  `docker/`、`scripts/`、`tests/*.py`、`README.md`、`IMPLEMENTATION_PLAN.md`、
-  `SHORTLIST_COLUMNS.md`、`LICENSE`。
+  `docker/`、`scripts/`、`tests/*.py`、`README.md`、`SHORTLIST_COLUMNS.md`、
+  `AGENTS.md`、`LICENSE`。
 - 需要用户决定的 tracked 旧文件：`all_seq_PD1_May12.csv`、`candiate.csv`、`main.py`。
 - 需要用户决定的本地 ignored 内容：`.venv/`、`.pytest_cache/`、`__pycache__/`、
   `config.yaml`、`results/`、`work/`、`tests/test_hydra_config.py.orig`。
 - 外部 `/data/AF3_database`、模型 checkpoint、`/ssd` 生产 screen 和 Docker data-root
   不属于仓库清理范围，除非用户另行明确授权。
-
