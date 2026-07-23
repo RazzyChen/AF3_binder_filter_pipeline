@@ -6,6 +6,7 @@ from pathlib import Path
 from af3_binder_filter.backends import UnifiedPrediction, build_backend_command
 from af3_binder_filter.config import AerithConfig
 from af3_binder_filter.esm_tools import load_cached_esm_rows
+from af3_binder_filter.derived_structures import file_sha256
 from af3_binder_filter.gpu import GPUInfo
 from af3_binder_filter.jobs import JobPlan, JobSpec
 from af3_binder_filter.workflow import (
@@ -180,11 +181,13 @@ def test_esm_cache_requires_complete_parseable_outputs(tmp_path: Path) -> None:
     score_path = tmp_path / "esm_scores.csv"
     header = (
         "job_name,esmfold_status,esmfold_model_path,esmfold_plddt,"
-        "esm_if_status,esm_if_log_likelihood,esm_if_log_likelihood_with_coord,esm_if_perplexity\n"
+        "esm_if_status,esm_if_log_likelihood,esm_if_log_likelihood_with_coord,esm_if_perplexity,"
+        "esm_effective_backend,esm_effective_derived_structure_id,"
+        "esm_effective_source_model_sha256\n"
     )
     row = (
         f"{job.job_id},success,{model_path},80.0,success,"
-        "-1.0,-1.0,3.0\n"
+        f"-1.0,-1.0,3.0,alphafold3,,{file_sha256(prediction_path)}\n"
     )
     score_path.write_text(header + row)
 
@@ -202,7 +205,9 @@ def test_esm_cache_requires_complete_parseable_outputs(tmp_path: Path) -> None:
     score_path.write_text(header + row + row)
     assert load() is None
 
-    score_path.write_text(header + row.replace(",3.0\n", ",nan\n"))
+    score_path.write_text(
+        header + row.replace(",-1.0,-1.0,3.0,", ",-1.0,-1.0,nan,")
+    )
     assert load() is None
 
     score_path.write_text(header + row)

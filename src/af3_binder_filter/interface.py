@@ -14,6 +14,11 @@ from typing import Any, Iterable
 import numpy as np
 
 from af3_binder_filter.backends import UnifiedPrediction
+from af3_binder_filter.derived_structures import (
+    SourceModelChangedError,
+    file_sha256,
+    materialize_derived_structures,
+)
 from af3_binder_filter.io_utils import atomic_write_csv
 from af3_binder_filter.jobs import JobSpec, parse_epitope_residues
 from af3_binder_filter.residue_format import (
@@ -47,6 +52,29 @@ STANDARD_AMINO_ACIDS = frozenset(
     }
 )
 
+_AMINO_ACID_ONE_LETTER = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+}
+
 
 class InterfaceError(RuntimeError):
     """Raised when a predicted complex cannot be analyzed geometrically."""
@@ -60,6 +88,7 @@ class ResidueRecord:
     sequence_position: int
     res_name: str
     atom_indexes: np.ndarray
+    mapping_mode: str
 
 
 def load_protein_complex(path: Path, *, target_chain: str, binder_chain: str):
@@ -109,33 +138,141 @@ def _annotation(array: Any, name: str, default: Any) -> np.ndarray:
         return np.full(array.array_length(), default)
 
 
-def _residue_records(array: Any, chain_id: str, sequence_length: int) -> list[ResidueRecord]:
+def _exact_subsequence_positions(observed: str, expected: str) -> list[int]:
+    """Return a unique exact-subsequence mapping, rejecting ambiguity."""
+
+    earliest: list[int] = []
+    cursor = 0
+    for residue in observed:
+        found = expected.find(residue, cursor)
+        if found < 0:
+            raise InterfaceError(
+                "structure sequence is not an exact subsequence of the input sequence"
+            )
+        earliest.append(found + 1)
+        cursor = found + 1
+
+    latest_reversed: list[int] = []
+    cursor = len(expected)
+    for residue in reversed(observed):
+        found = expected.rfind(residue, 0, cursor)
+        if found < 0:
+            raise InterfaceError(
+                "structure sequence is not an exact subsequence of the input sequence"
+            )
+        latest_reversed.append(found + 1)
+        cursor = found
+    latest = list(reversed(latest_reversed))
+    if earliest != latest:
+        raise InterfaceError(
+            "missing-residue mapping is ambiguous against the input sequence"
+        )
+    return earliest
+
+
+def _chain_sequence_positions(
+    *,
+    observed_sequence: str,
+    expected_sequence: str,
+    author_residue_ids: list[int],
+) -> tuple[list[int], str]:
+    expected = expected_sequence.strip().upper()
+    if not expected:
+        raise InterfaceError("input sequence is empty")
+    if not observed_sequence:
+        raise InterfaceError("structure chain has no standard residues")
+    if len(author_residue_ids) != len(observed_sequence):
+        raise InterfaceError(
+            "structure residue identifiers do not match its residue count"
+        )
+    if len(observed_sequence) > len(expected):
+        raise InterfaceError(
+            "structure contains more standard residues than the input sequence"
+        )
+
+    author_positions_valid = (
+        len(set(author_residue_ids)) == len(author_residue_ids)
+        and all(position > 0 for position in author_residue_ids)
+        and author_residue_ids == sorted(author_residue_ids)
+        and all(position <= len(expected) for position in author_residue_ids)
+        and all(
+            observed == expected[position - 1]
+            for observed, position in zip(
+                observed_sequence,
+                author_residue_ids,
+                strict=True,
+            )
+        )
+    )
+    if author_positions_valid:
+        return author_residue_ids, "author_residue_ids"
+    if len(observed_sequence) == len(expected):
+        if observed_sequence != expected:
+            raise InterfaceError(
+                "structure sequence does not match the input sequence"
+            )
+        return list(range(1, len(expected) + 1)), "complete_sequence_order"
+    return (
+        _exact_subsequence_positions(observed_sequence, expected),
+        "unique_exact_subsequence",
+    )
+
+
+def _residue_records(
+    array: Any,
+    chain_id: str,
+    expected_sequence: str,
+) -> list[ResidueRecord]:
     import biotite.structure as struc
 
     chain_indexes = np.where(array.chain_id == chain_id)[0]
     chain_array = array[chain_indexes]
     starts = struc.get_residue_starts(chain_array, add_exclusive_stop=True)
     insertion_codes = _annotation(chain_array, "ins_code", "")
+    residue_ranges = list(zip(starts[:-1], starts[1:], strict=True))
+    author_ids = [int(chain_array.res_id[start]) for start, _stop in residue_ranges]
+    residue_names = [str(chain_array.res_name[start]) for start, _stop in residue_ranges]
+    try:
+        observed_sequence = "".join(
+            _AMINO_ACID_ONE_LETTER[name] for name in residue_names
+        )
+    except KeyError as exc:
+        raise InterfaceError(
+            f"unsupported residue {exc.args[0]!r} in chain {chain_id!r}"
+        ) from exc
+    try:
+        positions, mapping_mode = _chain_sequence_positions(
+            observed_sequence=observed_sequence,
+            expected_sequence=expected_sequence,
+            author_residue_ids=author_ids,
+        )
+    except InterfaceError as exc:
+        raise InterfaceError(f"chain {chain_id!r}: {exc}") from exc
+    if (
+        len(positions) != len(set(positions))
+        or any(position <= 0 for position in positions)
+    ):
+        raise InterfaceError(
+            f"chain {chain_id!r} did not map to unique positive sequence positions"
+        )
+
     records: list[ResidueRecord] = []
-    used_sequence_positions: set[int] = set()
-    for ordinal, (start, stop) in enumerate(zip(starts[:-1], starts[1:], strict=True), start=1):
-        res_id = int(chain_array.res_id[start])
-        sequence_position = res_id
-        if (
-            sequence_position < 1
-            or sequence_position > sequence_length
-            or sequence_position in used_sequence_positions
-        ):
-            sequence_position = ordinal
-        used_sequence_positions.add(sequence_position)
+    for (start, stop), res_id, res_name, sequence_position in zip(
+        residue_ranges,
+        author_ids,
+        residue_names,
+        positions,
+        strict=True,
+    ):
         records.append(
             ResidueRecord(
                 chain_id=chain_id,
                 original_res_id=res_id,
                 original_ins_code=str(insertion_codes[start]).strip(),
                 sequence_position=sequence_position,
-                res_name=str(chain_array.res_name[start]),
+                res_name=res_name,
                 atom_indexes=chain_indexes[start:stop],
+                mapping_mode=mapping_mode,
             )
         )
     return records
@@ -407,23 +544,49 @@ def analyze_interface_geometry(
     epitope_residues: str | None = None,
     sasa_point_number: int = 1000,
     rosetta_input_dir: Path | None = None,
+    derived_structure_dir: Path | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "job_name": job.job_id,
         "interface_status": "error",
         "interface_error": "",
+        "derived_structure_status": "not_available",
+        "derived_structure_error": "",
+        "source_model_provenance_status": "not_checked",
+        "source_model_sha256_preparse": "",
+        "source_model_sha256_observed": "",
     }
     if prediction.status != "success" or prediction.best_model_path is None:
         result["interface_error"] = prediction.error or "prediction is not successful"
         return result
     try:
+        source_model_sha256 = file_sha256(prediction.best_model_path)
+        result["source_model_sha256_preparse"] = source_model_sha256
         array = load_protein_complex(
             prediction.best_model_path,
             target_chain=job.target_chain,
             binder_chain=job.binder_chain,
         )
-        target_records = _residue_records(array, job.target_chain, len(job.target_sequence))
-        binder_records = _residue_records(array, job.binder_chain, len(job.binder_sequence))
+        observed_source_sha256 = file_sha256(prediction.best_model_path)
+        result["source_model_sha256_observed"] = observed_source_sha256
+        if observed_source_sha256 != source_model_sha256:
+            raise SourceModelChangedError(
+                prediction.best_model_path,
+                expected_sha256=source_model_sha256,
+                observed_sha256=observed_source_sha256,
+                phase="while it was being parsed",
+            )
+        result["source_model_provenance_status"] = "verified"
+        target_records = _residue_records(
+            array,
+            job.target_chain,
+            job.target_sequence,
+        )
+        binder_records = _residue_records(
+            array,
+            job.binder_chain,
+            job.binder_sequence,
+        )
         contacts, minimum_distance, interface_atom_mask = _contact_metrics(
             array,
             target_records,
@@ -491,18 +654,58 @@ def analyze_interface_geometry(
         except Exception as exc:
             result["sasa_status"] = "error"
             result["sasa_error"] = str(exc)
-        if rosetta_input_dir is not None:
-            pdb_path = rosetta_input_dir / f"{job.job_id}.pdb"
-            residue_map = rosetta_input_dir / f"{job.job_id}.residue_map.tsv"
-            write_rosetta_pdb(
-                array,
-                target_records=target_records,
-                binder_records=binder_records,
-                pdb_path=pdb_path,
-                residue_map_path=residue_map,
-            )
-            result["rosetta_input_pdb"] = str(pdb_path)
-            result["residue_map_path"] = str(residue_map)
+        artifact_root = derived_structure_dir
+        if artifact_root is None and rosetta_input_dir is not None:
+            artifact_root = rosetta_input_dir.parent / "derived_structures"
+        if artifact_root is not None:
+            try:
+                derived = materialize_derived_structures(
+                    array,
+                    source_model_path=prediction.best_model_path,
+                    expected_source_model_sha256=source_model_sha256,
+                    target_chain=job.target_chain,
+                    binder_chain=job.binder_chain,
+                    target_sequence=job.target_sequence,
+                    binder_sequence=job.binder_sequence,
+                    interface_distance_cutoff=distance,
+                    target_records=target_records,
+                    binder_records=binder_records,
+                    artifacts_root=artifact_root,
+                    backend=prediction.backend,
+                    job_id=job.job_id,
+                    target_interface_positions=target_positions,
+                    binder_interface_positions=binder_positions,
+                )
+                result.update(derived.as_row())
+                # Rosetta consumes the same normalized AB structure; these
+                # aliases preserve the existing interface-stage contract.
+                result["rosetta_input_pdb"] = str(derived.complex_pdb)
+                result["residue_map_path"] = str(derived.residue_map)
+            except SourceModelChangedError as exc:
+                # Geometry belongs to the stable in-memory parse, but the
+                # backend must be ineligible once its on-disk provenance moves.
+                result["interface_status"] = "error"
+                result["interface_error"] = str(exc)
+                result["source_model_provenance_status"] = "changed"
+                result["source_model_sha256_observed"] = exc.observed_sha256
+                result["derived_structure_status"] = "error"
+                result["derived_structure_error"] = str(exc)
+            except Exception as exc:
+                # Geometry was already computed from the parsed structure.
+                # Derivation is a downstream reuse optimization and must not
+                # erase valid contact/SASA/PAE results.
+                result["derived_structure_status"] = "error"
+                result["derived_structure_error"] = str(exc)
+        else:
+            result["derived_structure_status"] = "not_requested"
+    except SourceModelChangedError as exc:
+        result["interface_status"] = "error"
+        result["interface_error"] = str(exc)
+        result["source_model_provenance_status"] = "changed"
+        result["source_model_sha256_preparse"] = exc.expected_sha256
+        result["source_model_sha256_observed"] = exc.observed_sha256
+        result["derived_structure_status"] = "error"
+        result["derived_structure_error"] = str(exc)
     except Exception as exc:
         result["interface_status"] = "error"
         result["interface_error"] = str(exc)

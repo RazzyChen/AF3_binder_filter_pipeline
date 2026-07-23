@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import math
 import os
+import shutil
 import subprocess
 import tempfile
 import warnings
@@ -13,6 +14,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from af3_binder_filter.config import ClusteringSettings
+from af3_binder_filter.derived_structures import (
+    row_job_identifier,
+    row_structure_is_eligible,
+    validated_artifacts_from_row,
+)
 from af3_binder_filter.interface import load_protein_complex
 from af3_binder_filter.io_utils import atomic_write_csv, atomic_write_text
 from af3_binder_filter.jobs import JobSpec
@@ -116,6 +122,22 @@ def _atomic_save_structure(path: Path, array: Any) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _atomic_copy(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=destination.suffix,
+        dir=destination.parent,
+    )
+    os.close(fd)
+    temporary_path = Path(temporary)
+    try:
+        shutil.copy2(source, temporary_path)
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def extract_binder_structure(
     complex_path: Path,
     output_path: Path,
@@ -139,12 +161,36 @@ def prepare_foldseek_inputs(
     model_paths: Mapping[str, Path],
     *,
     work_dir: Path,
+    rows: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[Path, Path]:
     binder_dir = work_dir / "binder_structures"
     complex_dir = work_dir / "complex_structures"
     binder_dir.mkdir(parents=True, exist_ok=True)
     complex_dir.mkdir(parents=True, exist_ok=True)
+    row_by_job: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        job_id = row_job_identifier(row)
+        if job_id is not None:
+            row_by_job[job_id] = row
     for job in jobs:
+        source_row = row_by_job.get(job.job_id)
+        if source_row is not None and not row_structure_is_eligible(
+            source_row,
+            prefix="effective",
+        ):
+            continue
+        destination = complex_dir / f"{job.job_id}.pdb"
+        binder_destination = binder_dir / f"{job.job_id}.pdb"
+        derived = validated_artifacts_from_row(
+            source_row or {},
+            prefix="effective",
+        )
+        if derived is not None:
+            # Both files were written from the interface stage's single parse
+            # and checksum-validated together.  Staging is now file I/O only.
+            _atomic_copy(derived.complex_pdb, destination)
+            _atomic_copy(derived.binder_pdb, binder_destination)
+            continue
         model_path = model_paths.get(job.job_id)
         if model_path is None or not model_path.is_file():
             continue
@@ -155,11 +201,10 @@ def prepare_foldseek_inputs(
         )
         # PDB is intentionally used for Foldseek staging: a Biotite-written
         # minimal mmCIF lacks entity/polymer categories required by createdb.
-        destination = complex_dir / f"{job.job_id}.pdb"
         _atomic_save_structure(destination, complex_array)
         extract_binder_structure(
             destination,
-            binder_dir / f"{job.job_id}.pdb",
+            binder_destination,
             binder_chain=job.binder_chain,
         )
     return binder_dir, complex_dir

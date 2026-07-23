@@ -30,10 +30,18 @@ def _row(**values):
 
 
 def test_complete_quality_tie_prefers_secondary():
-    selected = apply_effective_backend(_row())
+    selected = apply_effective_backend(
+        _row(
+            primary_normalized_binder_pdb_path="/tmp/primary-binder.pdb",
+            secondary_normalized_binder_pdb_path="/tmp/secondary-binder.pdb",
+        )
+    )
 
     assert selected["effective_backend"] == "opendde"
     assert selected["effective_best_model_path"] == "/tmp/secondary.cif"
+    assert selected["effective_normalized_binder_pdb_path"] == (
+        "/tmp/secondary-binder.pdb"
+    )
     assert selected["effective_selection_reason"] == "quality:secondary_tie_break"
 
 

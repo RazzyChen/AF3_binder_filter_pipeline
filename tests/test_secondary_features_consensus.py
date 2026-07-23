@@ -16,19 +16,32 @@ from af3_binder_filter.secondary_features import (
 )
 
 
-def _protein(path: Path, *, binder_shift: float = 0.0) -> Path:
+def _protein(
+    path: Path,
+    *,
+    binder_shift: float = 0.0,
+    missing_position: int | None = None,
+) -> Path:
     residue_count = 25
-    array = struc.AtomArray(residue_count * 2)
+    positions = [
+        position
+        for position in range(1, residue_count + 1)
+        if position != missing_position
+    ]
+    array = struc.AtomArray(len(positions) * 2)
     array.coord = np.asarray(
-        [[float(index), 0.0, 0.0] for index in range(residue_count)]
-        + [[float(index), 4.0 + binder_shift, 0.0] for index in range(residue_count)]
+        [[float(position - 1), 0.0, 0.0] for position in positions]
+        + [
+            [float(position - 1), 4.0 + binder_shift, 0.0]
+            for position in positions
+        ]
     )
-    array.chain_id = np.asarray(["A"] * residue_count + ["B"] * residue_count)
-    array.res_id = np.asarray(list(range(1, residue_count + 1)) * 2)
-    array.res_name = np.asarray(["ALA"] * residue_count * 2)
-    array.atom_name = np.asarray(["CA"] * residue_count * 2)
-    array.element = np.asarray(["C"] * residue_count * 2)
-    array.hetero = np.asarray([False] * residue_count * 2)
+    array.chain_id = np.asarray(["A"] * len(positions) + ["B"] * len(positions))
+    array.res_id = np.asarray(positions * 2)
+    array.res_name = np.asarray(["ALA"] * len(positions) * 2)
+    array.atom_name = np.asarray(["CA"] * len(positions) * 2)
+    array.element = np.asarray(["C"] * len(positions) * 2)
+    array.hetero = np.asarray([False] * len(positions) * 2)
     strucio.save_structure(str(path), array)
     return path
 
@@ -182,6 +195,35 @@ def test_consensus_uses_target_frame_and_separates_fold_from_pose(tmp_path: Path
     assert metrics["consensus_binder_fold_rmsd"] < 1e-6
     assert metrics["consensus_binder_fold_tm"] > 0.99
     assert metrics["consensus_epitope_jaccard"] == 1.0
+
+
+def test_raw_consensus_pairs_missing_residues_by_residue_position(
+    tmp_path: Path,
+) -> None:
+    primary = _protein(tmp_path / "primary.pdb")
+    secondary = _protein(
+        tmp_path / "secondary_missing.pdb",
+        binder_shift=2.0,
+        missing_position=10,
+    )
+    contacts = frozenset(range(1, 10))
+
+    metrics = structure_consensus_metrics(
+        primary,
+        secondary,
+        target_chain="A",
+        binder_chain="B",
+        primary_target_contacts=contacts,
+        secondary_target_contacts=contacts,
+        primary_binder_contacts=contacts,
+        secondary_binder_contacts=contacts,
+        settings=ConsensusSettings(),
+    )
+
+    assert metrics["consensus_coordinate_source"] == "raw_structure"
+    assert metrics["consensus_target_alignment_residues"] == 24
+    assert metrics["consensus_target_alignment_rmsd"] < 1e-6
+    assert metrics["consensus_binder_fixed_frame_rmsd"] == 2.0
 
 
 def test_multimetric_robust_anomaly_is_review_only() -> None:

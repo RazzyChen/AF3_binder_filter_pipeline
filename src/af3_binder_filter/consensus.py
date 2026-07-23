@@ -10,23 +10,51 @@ import numpy as np
 
 from af3_binder_filter.clustering import jaccard, parse_residue_set
 from af3_binder_filter.config import ConsensusSettings
+from af3_binder_filter.derived_structures import (
+    DerivedStructureArtifacts,
+    validated_artifacts_from_row,
+)
 from af3_binder_filter.interface import load_protein_complex
 from af3_binder_filter.residue_format import parse_contact_pairs
 
 
-def _ca_coordinates(array: Any, chain_id: str) -> np.ndarray:
+def _ca_coordinate_map(array: Any, chain_id: str) -> dict[int, np.ndarray]:
     import biotite.structure as struc
 
     chain = array[array.chain_id == chain_id]
+    if chain.array_length() == 0:
+        raise ValueError(f"chain {chain_id!r} has no coordinates")
     starts = struc.get_residue_starts(chain, add_exclusive_stop=True)
-    coordinates: list[np.ndarray] = []
+    categories = set(chain.get_annotation_categories())
+    coordinates: dict[int, np.ndarray] = {}
+    ordered_positions: list[int] = []
     for start, stop in zip(starts[:-1], starts[1:], strict=True):
         residue = chain[start:stop]
+        position = int(residue.res_id[0])
+        if position <= 0 or position in coordinates:
+            raise ValueError(
+                f"chain {chain_id!r} residue IDs must be unique positive positions"
+            )
+        if "ins_code" in categories and any(
+            str(value).strip() for value in residue.ins_code.tolist()
+        ):
+            raise ValueError(
+                f"chain {chain_id!r} residue {position} has an insertion code"
+            )
         ca = residue[residue.atom_name == "CA"]
-        coordinates.append(
-            np.asarray(ca.coord[0] if len(ca) else residue.coord.mean(axis=0), dtype=float)
+        coordinate = np.asarray(
+            ca.coord[0] if len(ca) else residue.coord.mean(axis=0),
+            dtype=float,
         )
-    return np.asarray(coordinates, dtype=float)
+        if coordinate.shape != (3,) or not np.all(np.isfinite(coordinate)):
+            raise ValueError(
+                f"chain {chain_id!r} residue {position} has invalid coordinates"
+            )
+        coordinates[position] = coordinate
+        ordered_positions.append(position)
+    if ordered_positions != sorted(ordered_positions):
+        raise ValueError(f"chain {chain_id!r} residue IDs are not increasing")
+    return coordinates
 
 
 def _kabsch(moving: np.ndarray, fixed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -84,9 +112,246 @@ def _robust_target_transform(
     return rotation, translation, keep
 
 
-def _selected(coords: np.ndarray, residues: frozenset[int]) -> np.ndarray:
-    indexes = [value - 1 for value in sorted(residues) if 1 <= value <= len(coords)]
-    return coords[indexes] if indexes else np.empty((0, 3), dtype=float)
+def _derived_coordinate_maps(
+    artifacts: DerivedStructureArtifacts,
+) -> dict[str, dict[int, np.ndarray]]:
+    """Load a coordinate bundle already validated with its manifest."""
+
+    with np.load(artifacts.coordinates, allow_pickle=False) as payload:
+        coordinates = np.asarray(payload["ca_coord"], dtype=float)
+        chains = payload["chain_id"].astype(str)
+        positions = payload["sequence_position"].astype(int)
+    result: dict[str, dict[int, np.ndarray]] = {}
+    for chain, position, coordinate in zip(
+        chains.tolist(),
+        positions.tolist(),
+        coordinates,
+        strict=True,
+    ):
+        result.setdefault(chain, {})[position] = coordinate
+    return result
+
+
+def _paired_coordinate_arrays(
+    fixed: Mapping[int, np.ndarray],
+    moving: Mapping[int, np.ndarray],
+    positions: frozenset[int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
+    common = set(fixed) & set(moving)
+    if positions is not None:
+        common &= set(positions)
+    ordered = tuple(sorted(common))
+    return (
+        np.asarray(
+            [fixed[position] for position in ordered],
+            dtype=float,
+        ).reshape((-1, 3)),
+        np.asarray(
+            [moving[position] for position in ordered],
+            dtype=float,
+        ).reshape((-1, 3)),
+        ordered,
+    )
+
+
+def _consensus_from_coordinate_maps(
+    primary: Mapping[str, Mapping[int, np.ndarray]],
+    secondary: Mapping[str, Mapping[int, np.ndarray]],
+    *,
+    target_chain: str,
+    binder_chain: str,
+    primary_target_contacts: frozenset[int],
+    secondary_target_contacts: frozenset[int],
+    primary_binder_contacts: frozenset[int],
+    secondary_binder_contacts: frozenset[int],
+    settings: ConsensusSettings,
+    coordinate_source: str = "derived_cache",
+) -> dict[str, Any]:
+    target_primary, target_secondary, target_positions = _paired_coordinate_arrays(
+        primary[target_chain],
+        secondary[target_chain],
+    )
+    rotation, translation, kept = _robust_target_transform(
+        target_secondary,
+        target_primary,
+        settings,
+    )
+    aligned_target_secondary = target_secondary @ rotation + translation
+
+    binder_primary, binder_secondary, binder_positions = _paired_coordinate_arrays(
+        primary[binder_chain],
+        secondary[binder_chain],
+    )
+    if len(binder_primary) < 3:
+        raise ValueError(
+            f"only {len(binder_primary)} common binder residues are available"
+        )
+    aligned_binder_secondary = binder_secondary @ rotation + translation
+
+    common_binder_interface = (
+        primary_binder_contacts & secondary_binder_contacts
+    )
+    primary_interface, secondary_interface, _interface_positions = (
+        _paired_coordinate_arrays(
+            primary[binder_chain],
+            secondary[binder_chain],
+            common_binder_interface,
+        )
+    )
+    secondary_interface = secondary_interface @ rotation + translation
+
+    independent_rotation, independent_translation = _kabsch(
+        binder_secondary,
+        binder_primary,
+    )
+    independent_aligned = (
+        binder_secondary @ independent_rotation + independent_translation
+    )
+    independent_distances = np.linalg.norm(
+        binder_primary - independent_aligned,
+        axis=1,
+    )
+
+    primary_target = primary[target_chain]
+    secondary_target = secondary[target_chain]
+    primary_binder = primary[binder_chain]
+    secondary_binder = secondary[binder_chain]
+    target_index = {position: index for index, position in enumerate(target_positions)}
+    binder_index = {position: index for index, position in enumerate(binder_positions)}
+    common_target = primary_target_contacts & secondary_target_contacts
+    common_binder = primary_binder_contacts & secondary_binder_contacts
+    pair_deltas: list[float] = []
+    for target_position in sorted(common_target):
+        if (
+            target_position not in primary_target
+            or target_position not in secondary_target
+            or target_position not in target_index
+        ):
+            continue
+        for binder_position in sorted(common_binder):
+            if (
+                binder_position not in primary_binder
+                or binder_position not in secondary_binder
+                or binder_position not in binder_index
+            ):
+                continue
+            first = np.linalg.norm(
+                primary_target[target_position] - primary_binder[binder_position]
+            )
+            second = np.linalg.norm(
+                aligned_target_secondary[target_index[target_position]]
+                - aligned_binder_secondary[binder_index[binder_position]]
+            )
+            if min(first, second) <= 15.0:
+                pair_deltas.append(abs(float(first - second)))
+    interface_lddt = None
+    if pair_deltas:
+        values = np.asarray(pair_deltas)
+        interface_lddt = float(
+            np.mean(
+                [
+                    (values < threshold).mean()
+                    for threshold in (0.5, 1.0, 2.0, 4.0)
+                ]
+            )
+        )
+    return {
+        "consensus_status": "success",
+        "consensus_target_alignment_residues": int(kept.sum()),
+        "consensus_target_alignment_rmsd": _rmsd(
+            target_primary[kept],
+            aligned_target_secondary[kept],
+        ),
+        "consensus_binder_fixed_frame_rmsd": _rmsd(
+            binder_primary,
+            aligned_binder_secondary,
+        ),
+        "consensus_interface_fixed_frame_rmsd": _rmsd(
+            primary_interface,
+            secondary_interface,
+        ),
+        "consensus_binder_center_displacement": (
+            float(
+                np.linalg.norm(
+                    binder_primary.mean(axis=0)
+                    - aligned_binder_secondary.mean(axis=0)
+                )
+            )
+            if len(binder_primary)
+            else None
+        ),
+        "consensus_interface_lddt": interface_lddt,
+        "consensus_binder_fold_rmsd": _rmsd(
+            binder_primary,
+            independent_aligned,
+        ),
+        "consensus_binder_fold_tm": _tm_score(
+            independent_distances,
+            len(binder_primary),
+        ),
+        "consensus_epitope_jaccard": jaccard(
+            primary_target_contacts,
+            secondary_target_contacts,
+        ),
+        "consensus_error": "",
+        "consensus_coordinate_source": coordinate_source,
+    }
+
+
+def structure_consensus_metrics_from_rows(
+    primary_row: Mapping[str, Any],
+    secondary_row: Mapping[str, Any],
+    *,
+    target_chain: str,
+    binder_chain: str,
+    primary_target_contacts: frozenset[int],
+    secondary_target_contacts: frozenset[int],
+    primary_binder_contacts: frozenset[int],
+    secondary_binder_contacts: frozenset[int],
+    settings: ConsensusSettings,
+    primary_prefix: str = "",
+    secondary_prefix: str = "",
+) -> dict[str, Any]:
+    """Use validated NPZ coordinates, falling back safely to source models."""
+
+    primary_artifacts = validated_artifacts_from_row(
+        primary_row,
+        prefix=primary_prefix,
+    )
+    secondary_artifacts = validated_artifacts_from_row(
+        secondary_row,
+        prefix=secondary_prefix,
+    )
+    if primary_artifacts is not None and secondary_artifacts is not None:
+        return _consensus_from_coordinate_maps(
+            _derived_coordinate_maps(primary_artifacts),
+            _derived_coordinate_maps(secondary_artifacts),
+            target_chain=target_chain,
+            binder_chain=binder_chain,
+            primary_target_contacts=primary_target_contacts,
+            secondary_target_contacts=secondary_target_contacts,
+            primary_binder_contacts=primary_binder_contacts,
+            secondary_binder_contacts=secondary_binder_contacts,
+            settings=settings,
+        )
+
+    def row_path(row: Mapping[str, Any], prefix: str) -> Path:
+        key = f"{prefix}_best_model_path" if prefix else "best_model_path"
+        return Path(str(row[key]))
+
+    result = structure_consensus_metrics(
+        row_path(primary_row, primary_prefix),
+        row_path(secondary_row, secondary_prefix),
+        target_chain=target_chain,
+        binder_chain=binder_chain,
+        primary_target_contacts=primary_target_contacts,
+        secondary_target_contacts=secondary_target_contacts,
+        primary_binder_contacts=primary_binder_contacts,
+        secondary_binder_contacts=secondary_binder_contacts,
+        settings=settings,
+    )
+    result["consensus_coordinate_source"] = "raw_structure_fallback"
+    return result
 
 
 def structure_consensus_metrics(
@@ -107,90 +372,24 @@ def structure_consensus_metrics(
     secondary = load_protein_complex(
         secondary_path, target_chain=target_chain, binder_chain=binder_chain
     )
-    target_primary = _ca_coordinates(primary, target_chain)
-    target_secondary = _ca_coordinates(secondary, target_chain)
-    binder_primary = _ca_coordinates(primary, binder_chain)
-    binder_secondary = _ca_coordinates(secondary, binder_chain)
-    rotation, translation, kept = _robust_target_transform(
-        target_secondary, target_primary, settings
+    return _consensus_from_coordinate_maps(
+        {
+            target_chain: _ca_coordinate_map(primary, target_chain),
+            binder_chain: _ca_coordinate_map(primary, binder_chain),
+        },
+        {
+            target_chain: _ca_coordinate_map(secondary, target_chain),
+            binder_chain: _ca_coordinate_map(secondary, binder_chain),
+        },
+        target_chain=target_chain,
+        binder_chain=binder_chain,
+        primary_target_contacts=primary_target_contacts,
+        secondary_target_contacts=secondary_target_contacts,
+        primary_binder_contacts=primary_binder_contacts,
+        secondary_binder_contacts=secondary_binder_contacts,
+        settings=settings,
+        coordinate_source="raw_structure",
     )
-    target_count = min(len(target_primary), len(target_secondary))
-    aligned_target_secondary = target_secondary[:target_count] @ rotation + translation
-    aligned_binder_secondary = binder_secondary @ rotation + translation
-    binder_count = min(len(binder_primary), len(aligned_binder_secondary))
-    fixed_distances = np.linalg.norm(
-        binder_primary[:binder_count] - aligned_binder_secondary[:binder_count], axis=1
-    )
-    common_binder_interface = primary_binder_contacts & secondary_binder_contacts
-    primary_interface = _selected(binder_primary, common_binder_interface)
-    secondary_interface = _selected(aligned_binder_secondary, common_binder_interface)
-
-    independent_count = min(len(binder_primary), len(binder_secondary))
-    independent_rotation, independent_translation = _kabsch(
-        binder_secondary[:independent_count], binder_primary[:independent_count]
-    )
-    independent_aligned = (
-        binder_secondary[:independent_count] @ independent_rotation
-        + independent_translation
-    )
-    independent_distances = np.linalg.norm(
-        binder_primary[:independent_count] - independent_aligned, axis=1
-    )
-
-    common_target = primary_target_contacts & secondary_target_contacts
-    common_binder = primary_binder_contacts & secondary_binder_contacts
-    pair_deltas: list[float] = []
-    for target_residue in sorted(common_target):
-        if target_residue > target_count:
-            continue
-        for binder_residue in sorted(common_binder):
-            if binder_residue > binder_count:
-                continue
-            first = np.linalg.norm(
-                target_primary[target_residue - 1] - binder_primary[binder_residue - 1]
-            )
-            second = np.linalg.norm(
-                aligned_target_secondary[target_residue - 1]
-                - aligned_binder_secondary[binder_residue - 1]
-            )
-            if min(first, second) <= 15.0:
-                pair_deltas.append(abs(float(first - second)))
-    interface_lddt = None
-    if pair_deltas:
-        values = np.asarray(pair_deltas)
-        interface_lddt = float(
-            np.mean([(values < threshold).mean() for threshold in (0.5, 1.0, 2.0, 4.0)])
-        )
-    return {
-        "consensus_status": "success",
-        "consensus_target_alignment_residues": int(kept.sum()),
-        "consensus_target_alignment_rmsd": _rmsd(
-            target_primary[:target_count][kept], aligned_target_secondary[kept]
-        ),
-        "consensus_binder_fixed_frame_rmsd": _rmsd(
-            binder_primary[:binder_count], aligned_binder_secondary[:binder_count]
-        ),
-        "consensus_interface_fixed_frame_rmsd": _rmsd(
-            primary_interface, secondary_interface
-        ),
-        "consensus_binder_center_displacement": float(
-            np.linalg.norm(
-                binder_primary[:binder_count].mean(axis=0)
-                - aligned_binder_secondary[:binder_count].mean(axis=0)
-            )
-        ) if binder_count else None,
-        "consensus_interface_lddt": interface_lddt,
-        "consensus_binder_fold_rmsd": _rmsd(
-            binder_primary[:independent_count], independent_aligned
-        ),
-        "consensus_binder_fold_tm": _tm_score(
-            independent_distances, independent_count
-        ),
-        "consensus_epitope_jaccard": jaccard(
-            primary_target_contacts, secondary_target_contacts
-        ),
-        "consensus_error": "",
-    }
 
 
 def _number(value: Any) -> float | None:
