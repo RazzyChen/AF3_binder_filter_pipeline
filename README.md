@@ -508,7 +508,18 @@ runtime:
 That exception is recorded in the bundle manifest; it does not make an
 uncommitted upstream tree release-grade. The build script accepts `--image` for
 an explicit candidate tag and `--cache-dir /ssd/aerith-buildkit-cache`; it only
-imports a local BuildKit cache after that cache has a valid `index.json`.
+imports a local BuildKit cache after that cache has a valid `index.json`. Local
+cache export requires a named `docker-container` Buildx builder, for example:
+
+```bash
+docker buildx create --name aerith-runtime-ci --driver docker-container --use
+
+uv run python scripts/build_runtime_image.py \
+  --config config.yaml \
+  --source-bundle "$BUNDLE" \
+  --cache-dir /ssd/aerith-buildkit-cache \
+  --builder aerith-runtime-ci
+```
 
 ### Export and restore
 

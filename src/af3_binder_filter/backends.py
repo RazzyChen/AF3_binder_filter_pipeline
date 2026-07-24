@@ -906,6 +906,7 @@ def build_runtime_image_command(
     context_root: Path | None = None,
     source_bundle: Path | None = None,
     build_cache_dir: Path | None = None,
+    buildx_builder: str | None = None,
 ) -> list[str]:
     """Build from local sources, staged contexts, or a verified source bundle."""
 
@@ -949,6 +950,8 @@ def build_runtime_image_command(
         _update_hash_field(lock_hash, path.read_bytes())
     recipe_sha256 = _runtime_recipe_sha256(dockerfile)
     command = [config.backend.docker_bin, "build", "--progress", "plain"]
+    if buildx_builder:
+        command.extend(["--builder", buildx_builder])
     if config.runtime.build_add_host:
         command.extend(["--add-host", config.runtime.build_add_host])
     if config.runtime.build_proxy:

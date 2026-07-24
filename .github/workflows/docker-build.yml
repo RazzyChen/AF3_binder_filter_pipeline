@@ -42,6 +42,7 @@ jobs:
       AERITH_RUNTIME_BUILD_CONFIG: ${{ vars.AERITH_RUNTIME_BUILD_CONFIG }}
       AERITH_RUNTIME_BUILDKIT_CACHE_DIR: ${{ vars.AERITH_RUNTIME_BUILDKIT_CACHE_DIR }}
       AERITH_RUNTIME_BUILD_LOCK: ${{ vars.AERITH_RUNTIME_BUILD_LOCK }}
+      AERITH_RUNTIME_BUILDX_BUILDER: aerith-runtime-ci
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -82,7 +83,15 @@ jobs:
             exit 2
           fi
           echo "RUNTIME_IMAGE=aerith/fold-runtime:ci-${suffix}" >> "$GITHUB_ENV"
-          docker buildx inspect
+          if docker buildx inspect "$AERITH_RUNTIME_BUILDX_BUILDER" >/dev/null 2>&1; then
+            docker buildx use "$AERITH_RUNTIME_BUILDX_BUILDER"
+          else
+            docker buildx create \
+              --name "$AERITH_RUNTIME_BUILDX_BUILDER" \
+              --driver docker-container \
+              --use
+          fi
+          docker buildx inspect "$AERITH_RUNTIME_BUILDX_BUILDER" --bootstrap
       - name: Verify immutable source bundle
         run: >-
           uv run python scripts/snapshot_runtime_sources.py verify
@@ -94,6 +103,7 @@ jobs:
           --source-bundle "$AERITH_RUNTIME_SOURCE_BUNDLE"
           --image "$RUNTIME_IMAGE"
           --cache-dir "$AERITH_RUNTIME_BUILDKIT_CACHE_DIR"
+          --builder "$AERITH_RUNTIME_BUILDX_BUILDER"
           --dry-run
       - name: Build and record candidate
         shell: bash
@@ -107,7 +117,8 @@ jobs:
             --config "$AERITH_RUNTIME_BUILD_CONFIG" \
             --source-bundle "$AERITH_RUNTIME_SOURCE_BUNDLE" \
             --image "$RUNTIME_IMAGE" \
-            --cache-dir "$AERITH_RUNTIME_BUILDKIT_CACHE_DIR"
+            --cache-dir "$AERITH_RUNTIME_BUILDKIT_CACHE_DIR" \
+            --builder "$AERITH_RUNTIME_BUILDX_BUILDER"
           image_id="$(docker image inspect --format '{{.Id}}' "$RUNTIME_IMAGE")"
           docker image tag "$image_id" aerith/fold-runtime:ci-candidate
           {

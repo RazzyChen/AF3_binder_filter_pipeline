@@ -28,6 +28,8 @@ def test_self_hosted_runtime_build_workflow_is_cache_backed_and_not_pr_triggered
     assert "AERITH_RUNTIME_SOURCE_BUNDLE" in workflow
     assert "snapshot_runtime_sources.py verify" in workflow
     assert "--cache-dir" in workflow
+    assert "--driver docker-container" in workflow
+    assert '--builder "$AERITH_RUNTIME_BUILDX_BUILDER"' in workflow
     assert "flock -n 9" in workflow
     assert "aerith/fold-runtime:ci-candidate" in workflow
 

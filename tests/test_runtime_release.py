@@ -176,8 +176,12 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
         config,
         source_bundle=bundle.root,
         build_cache_dir=cache,
+        buildx_builder="aerith-test-builder",
     )
 
+    assert ["--builder", "aerith-test-builder"] == command[
+        command.index("--builder") : command.index("--builder") + 2
+    ]
     assert "--cache-from" not in command
     assert ["--cache-to", f"type=local,dest={cache.resolve()},mode=max"] == command[
         command.index("--cache-to") : command.index("--cache-to") + 2
@@ -190,6 +194,7 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
         config,
         source_bundle=bundle.root,
         build_cache_dir=cache,
+        buildx_builder="aerith-test-builder",
     )
     assert ["--cache-from", f"type=local,src={cache.resolve()}"] == warmed_command[
         warmed_command.index("--cache-from") : warmed_command.index("--cache-from") + 2

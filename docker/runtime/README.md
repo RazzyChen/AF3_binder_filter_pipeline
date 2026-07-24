@@ -41,11 +41,16 @@ state in the bundle manifest. It is not release provenance.
 
 A self-hosted builder can select a candidate tag and persistent local cache:
 
+    docker buildx create --name aerith-runtime-ci --driver docker-container --use
     uv run python scripts/build_runtime_image.py \
       --config /ssd/aerith-ci/runtime-build.yaml \
       --source-bundle /data/aerith/runtime-sources/release-YYYYMMDD \
       --image aerith/fold-runtime:ci-example \
-      --cache-dir /ssd/aerith-buildkit-cache
+      --cache-dir /ssd/aerith-buildkit-cache \
+      --builder aerith-runtime-ci
+
+The local cache exporter requires the `docker-container` Buildx driver; Docker's
+default `docker` driver cannot export `type=local` cache data.
 
 Verify the resulting image before inference:
 
