@@ -1,0 +1,100 @@
+name: GPU golden smoke
+
+on:
+  schedule:
+    # Sunday 02:00 Asia/Shanghai. It is intentionally not PR- or push-triggered.
+    - cron: "0 18 * * 6"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Runtime image tag or immutable image ID; blank uses ci-candidate"
+        required: false
+        type: string
+      suites:
+        description: "Which secondary-backend golden suites to run serially"
+        required: true
+        default: both
+        type: choice
+        options: [both, opendde, protenix]
+
+permissions:
+  contents: read
+
+# Shared with docker-build.yml. No external fork event can ever acquire this
+# self-hosted GPU runner because this workflow has no pull_request trigger.
+concurrency:
+  group: aerith-runtime-host
+  cancel-in-progress: false
+
+jobs:
+  golden:
+    name: Golden AF3 cross-validation smoke
+    runs-on: [self-hosted, linux, x64, aerith-gpu]
+    timeout-minutes: 720
+    env:
+      AERITH_GPU_SMOKE_CONFIG: ${{ vars.AERITH_GPU_SMOKE_CONFIG }}
+      AERITH_GPU_SMOKE_CONTRACT: ${{ vars.AERITH_GPU_SMOKE_CONTRACT }}
+      AERITH_GPU_SMOKE_ROOT: ${{ vars.AERITH_GPU_SMOKE_ROOT }}
+      AERITH_GPU_SMOKE_LOCK: ${{ vars.AERITH_GPU_SMOKE_LOCK }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          check-latest: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install locked smoke environment
+        env:
+          UV_PYTHON: "3.12"
+        run: uv sync --locked --dev
+      - name: Exclusively run Docker doctor and golden suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AERITH_GPU_SMOKE_CONFIG:?Set repository variable AERITH_GPU_SMOKE_CONFIG}"
+          : "${AERITH_GPU_SMOKE_CONTRACT:?Set repository variable AERITH_GPU_SMOKE_CONTRACT}"
+          : "${AERITH_GPU_SMOKE_ROOT:?Set repository variable AERITH_GPU_SMOKE_ROOT}"
+          test -f "$AERITH_GPU_SMOKE_CONFIG"
+          test -f "$AERITH_GPU_SMOKE_CONTRACT"
+          mkdir -p "$AERITH_GPU_SMOKE_ROOT"
+          lock="${AERITH_GPU_SMOKE_LOCK:-${AERITH_GPU_SMOKE_ROOT}/gpu-smoke.lock}"
+          mkdir -p "$(dirname "$lock")"
+          exec 9>"$lock"
+          flock -n 9
+          busy="$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits | awk 'NF')"
+          if [[ -n "$busy" ]]; then
+            echo "GPU smoke requires an otherwise idle host; compute PIDs are active: $busy" >&2
+            exit 75
+          fi
+          requested_image="${{ inputs.image }}"
+          requested_image="${requested_image:-aerith/fold-runtime:ci-candidate}"
+          image_id="$(docker image inspect --format '{{.Id}}' "$requested_image")"
+          selected_suites="${{ inputs.suites }}"
+          selected_suites="${selected_suites:-both}"
+          case "$selected_suites" in
+            both) backends=(opendde protenix) ;;
+            opendde|protenix) backends=("$selected_suites") ;;
+            *) echo "unsupported suite selection: $selected_suites" >&2; exit 2 ;;
+          esac
+          docker run --rm --gpus all --network none "$image_id" doctor
+          export AERITH_GPU_SMOKE_IMAGE="$image_id"
+          export AERITH_GPU_SMOKE_AERITH_COMMAND="aerith"
+          for backend in "${backends[@]}"; do
+            export AERITH_GPU_SMOKE_BACKEND="$backend"
+            uv run pytest -q -m integration tests/test_gpu_smoke_contract.py
+          done
+          docker image tag "$image_id" aerith/fold-runtime:ci-last-known-good
+          {
+            echo "### GPU golden smoke passed"
+            echo
+            echo "- immutable image ID: \`$image_id\`"
+            echo "- suites: \`${backends[*]}\`"
+            echo "- contract: \`$AERITH_GPU_SMOKE_CONTRACT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
