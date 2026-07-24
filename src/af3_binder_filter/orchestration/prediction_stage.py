@@ -266,11 +266,11 @@ def prediction_stage(
     output_root = (
         Path(context.config.project.output_dir) / context.run_id / backend.name
     )
-    prediction_feature_identity = prediction_feature_identity(target_features)
+    feature_identity = prediction_feature_identity(target_features)
     reusable, pending = _reusable_predictions(
         context,
         input_paths,
-        prediction_feature_identity,
+        feature_identity,
         jobs=active_jobs,
         backend=backend,
         output_root=output_root,
@@ -429,7 +429,7 @@ def prediction_stage(
                 fingerprint=backend_job_fingerprint(
                     context,
                     job,
-                    prediction_feature_identity,
+                    feature_identity,
                     backend,
                 ),
                 backend=backend.name,

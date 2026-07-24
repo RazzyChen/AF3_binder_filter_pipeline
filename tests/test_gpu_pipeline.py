@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import af3_binder_filter.orchestration.prediction_stage as prediction_workflow
 from af3_binder_filter.backends import UnifiedPrediction, build_backend_command
 from af3_binder_filter.config import AerithConfig
 from af3_binder_filter.derived_structures import file_sha256
@@ -74,6 +75,65 @@ def _manifest(context: RunContext) -> RunManifest:
         job_fingerprints={job.job_id: "fingerprint" for job in context.plan.jobs},
     )
 
+
+def test_prediction_stage_binds_feature_identity_before_cache_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the imported feature-identity function distinct from local data."""
+
+    job = _job(0)
+    context = _context(tmp_path, (job,))
+    manifest = _manifest(context)
+    target_features = object()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        prediction_workflow,
+        "write_backend_inputs",
+        lambda *_args, **_kwargs: [],
+    )
+
+    def fake_feature_identity(bundle: object) -> str:
+        assert bundle is target_features
+        return "exact-feature-identity"
+
+    def fake_reusable_predictions(
+        _context: RunContext,
+        _input_paths: object,
+        feature_identity: str,
+        **_kwargs: object,
+    ) -> tuple[dict[str, UnifiedPrediction], list[JobSpec]]:
+        captured["feature_identity"] = feature_identity
+        return {
+            job.job_id: UnifiedPrediction(
+                job_id=job.job_id,
+                backend="alphafold3",
+                status="success",
+                fingerprint_valid=True,
+            )
+        }, []
+
+    monkeypatch.setattr(
+        prediction_workflow,
+        "prediction_feature_identity",
+        fake_feature_identity,
+    )
+    monkeypatch.setattr(
+        prediction_workflow,
+        "_reusable_predictions",
+        fake_reusable_predictions,
+    )
+
+    predictions, failed = prediction_workflow.prediction_stage(
+        context,
+        target_features,  # type: ignore[arg-type]
+        manifest,
+    )
+
+    assert captured == {"feature_identity": "exact-feature-identity"}
+    assert [prediction.status for prediction in predictions] == ["success"]
+    assert not failed
 
 def test_gpu_job_shards_use_deterministic_weighted_lpt() -> None:
     jobs = tuple(
