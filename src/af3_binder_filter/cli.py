@@ -384,10 +384,8 @@ def prepare_features_command(
         typer.Option("--dry-run/--no-dry-run", help="Override runtime.dry_run."),
     ] = None,
 ) -> None:
-    from af3_binder_filter.workflow import (
-        create_run_context,
-        run_prepare_features_only,
-    )
+    from af3_binder_filter.orchestration.context import create_run_context
+    from af3_binder_filter.orchestration.feature_stage import run_prepare_features_only
 
     try:
         context = create_run_context(
@@ -414,7 +412,8 @@ def analyze_interface_command(
     backend: HydraBackend = None,
     override: HydraOverrides = None,
 ) -> None:
-    from af3_binder_filter.workflow import create_run_context, run_interface_only
+    from af3_binder_filter.orchestration.context import create_run_context
+    from af3_binder_filter.orchestration.resume import run_interface_only
 
     try:
         context = create_run_context(
@@ -439,7 +438,8 @@ def cluster_command(
         typer.Option("--dry-run/--no-dry-run", help="Override runtime.dry_run."),
     ] = None,
 ) -> None:
-    from af3_binder_filter.workflow import create_run_context, run_clustering_only
+    from af3_binder_filter.orchestration.context import create_run_context
+    from af3_binder_filter.orchestration.resume import run_clustering_only
 
     try:
         context = create_run_context(
@@ -475,11 +475,11 @@ def hydra_pipeline(
         typer.Option("--dry-run/--no-dry-run", help="Override runtime.dry_run."),
     ] = None,
 ) -> None:
-    from af3_binder_filter.workflow import (
+    from af3_binder_filter.orchestration.context import (
         PipelineExecutionError,
         create_run_context,
-        run_pipeline,
     )
+    from af3_binder_filter.orchestration.pipeline import run_pipeline
 
     reporter = RichProgressReporter(console)
     try:

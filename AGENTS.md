@@ -48,9 +48,9 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 
 - `src/af3_binder_filter/cli.py`：Typer CLI。
 - `src/af3_binder_filter/config.py`、`config_tools.py`、`conf/`：Hydra Structured Config。
-- `src/af3_binder_filter/workflow.py`：稳定兼容门面，不放置新的阶段实现。
-- `src/af3_binder_filter/orchestration/`：生产编排实现；`PipelineRunner` 显式执行
-  十个 stage，`PipelineState` 集中保存跨阶段状态，stage registry 固定名称、顺序和启用条件。
+- `src/af3_binder_filter/orchestration/`：生产编排实现；包根导出稳定 CLI/API 入口，
+  各 stage 模块拥有实现细节。`PipelineRunner` 显式执行十个 stage，`PipelineState`
+  集中保存跨阶段状态，stage registry 固定名称、顺序和启用条件。
 - `jobs.py`、`manifest.py`、`io_utils.py`：任务身份、恢复可靠性和原子 I/O。
 - `features.py`、`secondary_features.py`：本地 MSA/template 与后端 feature contract。
 - `backends.py`：AF3/Protenix/OpenDDE adapters。
@@ -115,7 +115,7 @@ GitHub Actions（CPU CI / 镜像发布 / 手动 GPU smoke）
 只有满足以下条件时才评估 K8s：多物理 GPU 节点、多人共享队列、需要自动扩缩容/故障重调度、
 已有长期维护的 Kubernetes 平台，或 Aerith 需要成为常驻 API 服务。进入 K8s 前先抽象
 `Executor` 协议，至少支持 `local_docker`，再增加 `slurm` 或 `kubernetes` adapter；不要把
-K8s 逻辑直接写死在 workflow。若实验室已有 Slurm，批量科学计算通常优先接 Slurm。
+K8s 逻辑直接写死在 orchestration pipeline。若实验室已有 Slurm，批量科学计算通常优先接 Slurm。
 
 ## 清理协议
 

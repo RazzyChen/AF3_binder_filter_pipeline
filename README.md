@@ -148,8 +148,9 @@ derived data under `artifacts/`. Raw backend predictions remain in
 
 ### Orchestration architecture
 
-`src/af3_binder_filter/workflow.py` is a stable compatibility facade; production
-implementation lives in the typed `orchestration/` package. `PipelineRunner`
+`src/af3_binder_filter/orchestration/` is the typed production orchestration
+package. Its public API is explicit (`create_run_context`, `run_pipeline`, and
+standalone stage entry points); CLI code imports the owning modules directly. `PipelineRunner`
 keeps the ten-stage transition order explicit, while `PipelineState` is the only
 object carrying mutable predictions, rows, manifest state, and clustering
 results across stage boundaries. Feature preparation, prediction, interface

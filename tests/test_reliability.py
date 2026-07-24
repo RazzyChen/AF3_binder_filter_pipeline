@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import af3_binder_filter.workflow as workflow
+import af3_binder_filter.orchestration.feature_identity as feature_identity_workflow
 import af3_binder_filter.orchestration.context as workflow_context
 import af3_binder_filter.orchestration.pipeline as pipeline_workflow
 import af3_binder_filter.orchestration.prediction_stage as prediction_workflow
@@ -18,14 +18,16 @@ from af3_binder_filter.features import FeatureBundle
 from af3_binder_filter.io_utils import atomic_write_csv, atomic_write_json
 from af3_binder_filter.jobs import JobSpec, file_sha256
 from af3_binder_filter.manifest import write_job_manifest
-from af3_binder_filter.workflow import (
-    _backend_job_fingerprint,
+from af3_binder_filter.orchestration.context import (
     PipelineExecutionError,
     create_run_context,
+)
+from af3_binder_filter.orchestration.prediction_stage import _backend_job_fingerprint
+from af3_binder_filter.orchestration.resume import (
     load_predictions_for_context,
     run_clustering_only,
-    secondary_gate_job_ids,
 )
+from af3_binder_filter.orchestration.selection import secondary_gate_job_ids
 
 
 def test_backend_job_fingerprint_uses_actual_backend_feature_bundle() -> None:
@@ -151,7 +153,7 @@ def test_matching_secondary_job_manifest_has_no_pending_job(
         artifacts={"best_model_path": str(model)},
     )
 
-    reusable, pending = workflow._reusable_predictions(
+    reusable, pending = prediction_workflow._reusable_predictions(
         context,
         [tmp_path / "input.json"],
         "secondary-features",
@@ -208,7 +210,7 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
         template_mmcif_dir=template_dir,
         source_mmcif_dir=tmp_path / "source-mmcif",
     )
-    original_feature_identity = workflow._prediction_feature_identity(bundle)
+    original_feature_identity = feature_identity_workflow._prediction_feature_identity(bundle)
     model = tmp_path / "model.cif"
     model.write_text("data_model\n")
     prediction = UnifiedPrediction(
@@ -244,8 +246,8 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
     )
 
     non_pairing.write_text(">query\nLMNP\n>changed\nLMNP\n")
-    changed_feature_identity = workflow._prediction_feature_identity(bundle)
-    reusable, pending = workflow._reusable_predictions(
+    changed_feature_identity = feature_identity_workflow._prediction_feature_identity(bundle)
+    reusable, pending = prediction_workflow._reusable_predictions(
         context,
         [tmp_path / "input.json"],
         changed_feature_identity,
@@ -428,7 +430,7 @@ def test_pipeline_keyboard_interrupt_is_persisted_and_re_raised(
 
     monkeypatch.setattr(pipeline_workflow, "prepare_features_stage", interrupt)
     with pytest.raises(KeyboardInterrupt):
-        workflow.run_pipeline(context)
+        pipeline_workflow.run_pipeline(context)
 
     manifest = json.loads(context.manifest_path.read_text())
     assert manifest["status"] == "interrupted"
@@ -494,13 +496,13 @@ def test_standalone_cluster_rejects_tampered_candidate_artifact(
     )
     model = tmp_path / "secondary-model.cif"
     model.write_text("data_secondary\n")
-    manifest = workflow._existing_or_new_manifest(
+    manifest = workflow_context._existing_or_new_manifest(
         context,
-        workflow._expected_feature_fingerprint(
+        workflow_context._expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    workflow._persist_clustering_inputs(
+    resume_workflow._persist_clustering_inputs(
         context,
         [
             {
@@ -516,7 +518,7 @@ def test_standalone_cluster_rejects_tampered_candidate_artifact(
         ],
         manifest,
     )
-    _all_path, candidate_path = workflow._clustering_input_paths(context)
+    _all_path, candidate_path = resume_workflow._clustering_input_paths(context)
     candidate_path.write_text(candidate_path.read_text() + "tampered\n")
     original_manifest = context.manifest_path.read_bytes()
     original_resolved = (context.results_dir / "resolved_config.yaml").read_bytes()
@@ -626,13 +628,13 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
     )
     model = tmp_path / "effective-secondary.cif"
     model.write_text("data_effective\n")
-    manifest = workflow._existing_or_new_manifest(
+    manifest = workflow_context._existing_or_new_manifest(
         context,
-        workflow._expected_feature_fingerprint(
+        workflow_context._expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    workflow._persist_clustering_inputs(
+    resume_workflow._persist_clustering_inputs(
         context,
         [
             {
@@ -649,7 +651,7 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
         manifest,
     )
 
-    all_rows, candidate_rows = workflow._validated_clustering_inputs(
+    all_rows, candidate_rows = resume_workflow._validated_clustering_inputs(
         context, manifest
     )
 
@@ -671,13 +673,13 @@ def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mut
     )
     model = tmp_path / "effective.cif"
     model.write_text("data_before\n")
-    manifest = workflow._existing_or_new_manifest(
+    manifest = workflow_context._existing_or_new_manifest(
         context,
-        workflow._expected_feature_fingerprint(
+        workflow_context._expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    workflow._persist_clustering_inputs(
+    resume_workflow._persist_clustering_inputs(
         context,
         [
             {
@@ -712,7 +714,7 @@ def test_pipeline_resume_preserves_existing_manifest_artifacts(
     payload["artifact_sha256"]["resume_sentinel"] = "abc123"
     atomic_write_json(context.manifest_path, payload)
 
-    workflow.run_pipeline(context)
+    pipeline_workflow.run_pipeline(context)
 
     resumed = json.loads(context.manifest_path.read_text())
     assert resumed["artifact_sha256"]["resume_sentinel"] == "abc123"
@@ -753,16 +755,16 @@ def test_prepared_feature_content_is_bound_to_run_manifest(
         template_mmcif_dir=templates,
         source_mmcif_dir=tmp_path / "source-mmcif",
     )
-    manifest = workflow._existing_or_new_manifest(
+    manifest = workflow_context._existing_or_new_manifest(
         context,
-        workflow._expected_feature_fingerprint(
+        workflow_context._expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
 
-    first = workflow._bind_feature_content(manifest, bundle)
+    first = feature_identity_workflow._bind_feature_content(manifest, bundle)
     non_pairing.write_text(">query\nLNMP\n")
-    second = workflow._bind_feature_content(manifest, bundle)
+    second = feature_identity_workflow._bind_feature_content(manifest, bundle)
 
     assert first != second
     assert manifest.feature_content_sha256 == second
@@ -780,13 +782,13 @@ def test_standalone_cluster_rejects_wrong_job_membership_without_mutation(
     )
     model = tmp_path / "effective.cif"
     model.write_text("data_effective\n")
-    manifest = workflow._existing_or_new_manifest(
+    manifest = workflow_context._existing_or_new_manifest(
         context,
-        workflow._expected_feature_fingerprint(
+        workflow_context._expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    workflow._persist_clustering_inputs(
+    resume_workflow._persist_clustering_inputs(
         context,
         [
             {
@@ -799,7 +801,7 @@ def test_standalone_cluster_rejects_wrong_job_membership_without_mutation(
         ],
         manifest,
     )
-    all_path, _candidate_path = workflow._clustering_input_paths(context)
+    all_path, _candidate_path = resume_workflow._clustering_input_paths(context)
     with all_path.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     rows[0]["job_name"] = "not-in-the-immutable-plan"
@@ -828,8 +830,8 @@ def test_cluster_cli_requests_read_only_existing_run_context(
         captured.update(kwargs)
         return context
 
-    monkeypatch.setattr(workflow, "create_run_context", fake_create_run_context)
-    monkeypatch.setattr(workflow, "run_clustering_only", lambda _context: False)
+    monkeypatch.setattr(workflow_context, "create_run_context", fake_create_run_context)
+    monkeypatch.setattr(resume_workflow, "run_clustering_only", lambda _context: False)
 
     result = CliRunner().invoke(app, ["cluster"])
 
@@ -845,11 +847,11 @@ def test_cluster_cli_failure_does_not_claim_fake_singletons(
         results_dir=tmp_path / "results" / "run",
     )
     monkeypatch.setattr(
-        workflow,
+        workflow_context,
         "create_run_context",
         lambda *_args, **_kwargs: context,
     )
-    monkeypatch.setattr(workflow, "run_clustering_only", lambda _context: True)
+    monkeypatch.setattr(resume_workflow, "run_clustering_only", lambda _context: True)
 
     result = CliRunner().invoke(app, ["cluster"])
 

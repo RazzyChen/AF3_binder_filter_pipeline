@@ -15,15 +15,15 @@ from af3_binder_filter.execution import CommandOutcome, LocalCommandExecutor
 from af3_binder_filter.gpu import GPUInfo
 from af3_binder_filter.jobs import JobPlan, JobSpec
 from af3_binder_filter.manifest import RunManifest
-from af3_binder_filter.workflow import (
+from af3_binder_filter.orchestration.clustering_stage import clustering_stage
+from af3_binder_filter.orchestration.command_runtime import _run_sharded_commands
+from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
     _runtime_gpus,
-    _run_sharded_commands,
-    clustering_stage,
-    esm_stage,
     plan_gpu_job_shards,
 )
+from af3_binder_filter.orchestration.esm_stage import esm_stage
 
 
 def _job(index: int) -> JobSpec:

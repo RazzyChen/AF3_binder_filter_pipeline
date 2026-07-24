@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import pytest
 
 from af3_binder_filter.config import AerithConfig
@@ -13,7 +14,7 @@ from af3_binder_filter.orchestration.stage_registry import (
     progress_stage_specs,
 )
 from af3_binder_filter.rosetta import RosettaCliEngine
-from af3_binder_filter.workflow import run_pipeline
+from af3_binder_filter.orchestration.pipeline import run_pipeline
 
 
 def test_stage_registry_has_one_explicit_order_for_all_ten_stages() -> None:
@@ -68,5 +69,9 @@ def test_interface_energy_factory_is_explicit_and_typed() -> None:
         create_interface_energy_engine(config.interface)
 
 
-def test_workflow_is_a_compatibility_facade() -> None:
+def test_pipeline_is_owned_by_the_pipeline_module() -> None:
     assert run_pipeline.__module__ == "af3_binder_filter.orchestration.pipeline"
+
+
+def test_deprecated_workflow_module_is_absent() -> None:
+    assert importlib.util.find_spec("af3_binder_filter.workflow") is None

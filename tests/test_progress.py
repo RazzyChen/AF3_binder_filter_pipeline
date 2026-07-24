@@ -12,12 +12,12 @@ from af3_binder_filter.progress import (
     RichProgressReporter,
     StageSpec,
 )
-from af3_binder_filter.workflow import (
+from af3_binder_filter.orchestration.command_runtime import _stable_completion_probe
+from af3_binder_filter.orchestration.context import (
     _pipeline_stage_specs,
-    _stable_completion_probe,
     create_run_context,
-    run_pipeline,
 )
+from af3_binder_filter.orchestration.pipeline import run_pipeline
 
 
 class RecordingReporter(NullProgressReporter):

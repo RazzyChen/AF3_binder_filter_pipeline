@@ -19,11 +19,11 @@ from af3_binder_filter.config_tools import (
     write_initial_config,
     write_minimal_production_config,
 )
-from af3_binder_filter.workflow import (
+from af3_binder_filter.orchestration.context import (
     PipelineExecutionError,
     create_run_context,
-    run_pipeline,
 )
+from af3_binder_filter.orchestration.pipeline import run_pipeline
 
 
 def _database(root: Path) -> Path:
