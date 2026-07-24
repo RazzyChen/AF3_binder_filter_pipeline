@@ -400,6 +400,30 @@ def test_primary_only_context_records_all_resolved_image_and_source_ids(
     assert manifest["provenance"]["output_schema"]["version"] == 3
 
 
+def test_dry_run_keeps_image_reference_when_image_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow_context,
+        "resolve_docker_image_id",
+        lambda *_args: None,
+    )
+
+    context = create_run_context(
+        _run_config(tmp_path),
+        overrides=_run_overrides(tmp_path),
+        dry_run=True,
+    )
+
+    assert context.config.backend.image == "aerith/fold-runtime:local"
+    assert context.config.backend.image_id is None
+    assert context.config.features.mmseqs_id == (
+        "unresolved-dry-run:aerith/fold-runtime:local:"
+        "mmseqs:8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
+    )
+
+
 def test_pipeline_keyboard_interrupt_is_persisted_and_re_raised(
     tmp_path: Path,
     monkeypatch,

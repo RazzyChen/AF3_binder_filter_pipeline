@@ -183,6 +183,26 @@ def test_runtime_gpu_selection_filters_busy_and_disallowed_devices(
     assert [gpu.index for gpu in selected] == [0, 2]
 
 
+def test_dry_run_without_configured_gpus_never_queries_hardware(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path, (_job(0),))
+    context.config.runtime.dry_run = True
+    monkeypatch.setattr(
+        "af3_binder_filter.orchestration.context.query_gpus",
+        lambda: pytest.fail("dry-run must not call nvidia-smi"),
+    )
+
+    selected = runtime_gpus(
+        context,
+        job_count=1,
+        stage_name="primary_prediction",
+    )
+
+    assert [gpu.index for gpu in selected] == [0]
+
+
 def test_sharded_runner_preserves_negative_return_codes(
     tmp_path: Path,
 ) -> None:

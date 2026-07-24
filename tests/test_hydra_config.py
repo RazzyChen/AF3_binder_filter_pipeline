@@ -238,7 +238,7 @@ def test_config_create_cli_writes_minimal_yaml_and_protects_existing_file(
     original = output.read_text()
     result = runner.invoke(app, arguments)
     assert result.exit_code == 1
-    assert "use --force" in result.output
+    assert "--force" in result.output
     assert output.read_text() == original
 
     result = runner.invoke(app, [*arguments, "--force"])

@@ -65,9 +65,12 @@ def parse_nvidia_smi_csv(output: str) -> list[GPUInfo]:
 def query_gpus() -> list[GPUInfo]:
     """Query GPUs with nvidia-smi."""
 
-    result = subprocess.run(
-        NVIDIA_SMI_QUERY, shell=False, check=False, text=True, capture_output=True
-    )
+    try:
+        result = subprocess.run(
+            NVIDIA_SMI_QUERY, shell=False, check=False, text=True, capture_output=True
+        )
+    except OSError as exc:
+        raise GPUError(f"nvidia-smi is unavailable: {exc}") from exc
     if result.returncode != 0:
         raise GPUError(f"nvidia-smi failed with code {result.returncode}: {result.stderr.strip()}")
     return parse_nvidia_smi_csv(result.stdout)

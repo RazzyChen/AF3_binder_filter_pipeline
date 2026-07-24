@@ -130,13 +130,7 @@ def runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> lis
         return []
     allowed = context.config.runtime.gpu_ids or None
     if context.config.runtime.dry_run:
-        if allowed:
-            ids = list(allowed)
-        else:
-            try:
-                ids = [gpu.index for gpu in query_gpus()]
-            except GPUError:
-                ids = [0]
+        ids = list(allowed) if allowed else [0]
         return [GPUInfo(index, "dry-run", 0, 0) for index in ids[:job_count]]
     try:
         free = select_free_gpus(
@@ -241,15 +235,19 @@ def create_run_context(
         secondary_backend=secondary_backend,
         overrides=_overrides_with_runtime(overrides, limit=limit, dry_run=dry_run),
     )
-
     inspected_images: dict[tuple[str, str], str | None] = {}
 
-    def verified_image_id(settings: Any, label: str) -> str:
+    def verified_image_id(settings: Any, label: str) -> str | None:
         image_key = (settings.docker_bin, settings.image)
         if image_key not in inspected_images:
             inspected_images[image_key] = resolve_docker_image_id(*image_key)
         actual = inspected_images[image_key]
         if not actual:
+            # A dry run only emits a plan. It should preserve the image
+            # reference when the local daemon or image is unavailable, rather
+            # than making a CPU-only planning environment fail.
+            if config.runtime.dry_run:
+                return None
             raise PipelineExecutionError(
                 f"cannot resolve the actual Docker image ID for {label}: {settings.image}"
             )
@@ -260,44 +258,28 @@ def create_run_context(
             )
         return actual
 
-    config.backend.image_id = verified_image_id(config.backend, "primary backend")
-    config.backend.image = config.backend.image_id
-    OmegaConf.update(
-        resolved,
-        "backend.image_id",
-        config.backend.image_id,
-        merge=False,
-    )
-    OmegaConf.update(resolved, "backend.image", config.backend.image, merge=False)
+    def record_image_identity(settings: Any, label: str, section: str) -> None:
+        image_id = verified_image_id(settings, label)
+        if image_id is not None:
+            settings.image_id = image_id
+            settings.image = image_id
+        OmegaConf.update(resolved, f"{section}.image_id", settings.image_id, merge=False)
+        OmegaConf.update(resolved, f"{section}.image", settings.image, merge=False)
+
+    record_image_identity(config.backend, "primary backend", "backend")
     if config.secondary_backend.enabled:
-        config.secondary_backend.image_id = verified_image_id(
-            config.secondary_backend, "secondary backend"
+        record_image_identity(
+            config.secondary_backend,
+            "secondary backend",
+            "secondary_backend",
         )
-        config.secondary_backend.image = config.secondary_backend.image_id
-        OmegaConf.update(
-            resolved,
-            "secondary_backend.image_id",
-            config.secondary_backend.image_id,
-            merge=False,
-        )
-        OmegaConf.update(
-            resolved,
-            "secondary_backend.image",
-            config.secondary_backend.image,
-            merge=False,
-        )
-    config.features.image_id = verified_image_id(config.features, "feature builder")
-    config.features.image = config.features.image_id
-    OmegaConf.update(
-        resolved,
-        "features.image_id",
-        config.features.image_id,
-        merge=False,
-    )
-    OmegaConf.update(resolved, "features.image", config.features.image, merge=False)
+    record_image_identity(config.features, "feature builder", "features")
     if config.features.mmseqs_id is None:
+        feature_image_identity = config.features.image_id or (
+            f"unresolved-dry-run:{config.features.image}"
+        )
         config.features.mmseqs_id = (
-            f"{config.features.image_id}:mmseqs:{config.runtime.mmseqs_version}"
+            f"{feature_image_identity}:mmseqs:{config.runtime.mmseqs_version}"
         )
         OmegaConf.update(
             resolved,
