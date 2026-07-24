@@ -86,6 +86,48 @@ def test_source_bundle_is_filtered_hashed_and_does_not_touch_sources(
         verify_runtime_source_bundle(bundle.root)
 
 
+def test_source_bundle_rejects_dirty_git_trees_without_explicit_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = _runtime_sources(tmp_path)
+    config = _runtime_config(tmp_path, sources)
+    monkeypatch.setattr(
+        "af3_binder_filter.backends._git_head",
+        lambda _source: "deadbeef",
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.backends._git_worktree_status",
+        lambda source: "M package.py" if source == sources["opendde"] else "",
+    )
+
+    with pytest.raises(BackendError, match="source trees are dirty: opendde-src"):
+        create_runtime_source_bundle(config, tmp_path / "data" / "dirty-bundle")
+
+    config.runtime.allow_dirty_source_trees = True
+    bundle = create_runtime_source_bundle(config, tmp_path / "data" / "dirty-bundle")
+    source_state = bundle.manifest["contexts"]["opendde-src"]
+    assert source_state["source_git_clean"] is False
+    assert source_state["source_git_status"] == "M package.py"
+
+
+def test_direct_build_command_rejects_dirty_git_trees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = _runtime_sources(tmp_path)
+    config = _runtime_config(tmp_path, sources)
+    monkeypatch.setattr(
+        "af3_binder_filter.backends._git_head",
+        lambda _source: "deadbeef",
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.backends._git_worktree_status",
+        lambda source: "M package.py" if source == sources["esm"] else "",
+    )
+
+    with pytest.raises(BackendError, match="source trees are dirty: esm-src"):
+        build_runtime_image_command(config)
+
+
 def test_build_command_verifies_bundle_and_records_source_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

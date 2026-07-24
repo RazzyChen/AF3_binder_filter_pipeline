@@ -260,6 +260,7 @@ class RuntimeSettings:
     opendde_source_commit: str = "266ce4c49d492ad1077866000d83704999985f46"
     esm_source_dir: str = "/home/structure/Software/esm"
     esm_source_commit: str = "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+    allow_dirty_source_trees: bool = False
     mmseqs_release: str = "18-8cc5c"
     mmseqs_version: str = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
     mmseqs_archive_sha256: str = "83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7"
@@ -268,7 +269,7 @@ class RuntimeSettings:
     foldseek_archive_sha256: str = (
         "af7a688ffd8625b356c380380fb5650ec811262a2d18bdb0faeda95cc4894a55"
     )
-    minimum_build_free_gib: int = 45
+    minimum_build_free_gib: int = 100
     build_proxy: str | None = None
     build_add_host: str | None = None
 

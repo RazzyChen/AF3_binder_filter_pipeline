@@ -576,13 +576,29 @@ def _git_head(source: Path) -> str | None:
     return actual or None
 
 
+def _git_worktree_status(source: Path) -> str | None:
+    """Return Git porcelain output, or ``None`` for a non-Git source tree."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
 def _validated_runtime_source_heads(
     config: AerithConfig, sources: dict[str, Path]
-) -> dict[str, str | None]:
+) -> tuple[dict[str, str | None], dict[str, str | None]]:
     for name, source in sources.items():
         if not source.is_dir():
             raise BackendError(f"runtime build context {name} does not exist: {source}")
     heads = {name: _git_head(source) for name, source in sources.items()}
+    worktree_statuses = {name: _git_worktree_status(source) for name, source in sources.items()}
     expected_commits = {
         "opendde-src": config.runtime.opendde_source_commit,
         "esm-src": config.runtime.esm_source_commit,
@@ -594,7 +610,17 @@ def _validated_runtime_source_heads(
                 f"runtime build context {name} commit mismatch: "
                 f"expected {expected}, found {actual or 'unavailable'}"
             )
-    return heads
+    if not config.runtime.allow_dirty_source_trees:
+        dirty = {name: status for name, status in worktree_statuses.items() if status}
+        if dirty:
+            names = ", ".join(sorted(dirty))
+            raise BackendError(
+                "runtime source trees are dirty: "
+                f"{names}; clean or commit them, or explicitly set "
+                "runtime.allow_dirty_source_trees=true before creating a "
+                "content-addressed source bundle"
+            )
+    return heads, worktree_statuses
 
 
 def _update_hash_field(digest: Any, value: str | bytes) -> None:
@@ -678,7 +704,7 @@ def create_runtime_source_bundle(
     """Copy four filtered source trees into an atomic, content-hashed bundle."""
 
     sources = _runtime_source_paths(config)
-    heads = _validated_runtime_source_heads(config, sources)
+    heads, worktree_statuses = _validated_runtime_source_heads(config, sources)
     expanded_destination = destination.expanduser()
     if expanded_destination.is_symlink():
         raise BackendError(
@@ -727,6 +753,10 @@ def create_runtime_source_bundle(
                 **context,
                 "source_path": str(source),
                 "source_git_commit": heads[name],
+                "source_git_clean": (
+                    worktree_statuses[name] == "" if worktree_statuses[name] is not None else None
+                ),
+                "source_git_status": worktree_statuses[name] or None,
             }
         bundle_sha256 = _runtime_bundle_digest(contexts)
         manifest: dict[str, Any] = {
@@ -864,6 +894,7 @@ def build_runtime_image_command(
         sources = verified_bundle.context_paths
     elif context_root is None:
         sources = _runtime_source_paths(config)
+        _validated_runtime_source_heads(config, sources)
     else:
         resolved_context_root = context_root.expanduser().resolve()
         if (resolved_context_root / RUNTIME_SOURCE_BUNDLE_MANIFEST).is_file():

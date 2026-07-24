@@ -200,7 +200,8 @@ def initial_config_payload(
             "foldseek_archive_sha256": (
                 "af7a688ffd8625b356c380380fb5650ec811262a2d18bdb0faeda95cc4894a55"
             ),
-            "minimum_build_free_gib": 45,
+            "allow_dirty_source_trees": False,
+            "minimum_build_free_gib": 100,
             "build_proxy": None,
             "build_add_host": None,
         },

@@ -564,13 +564,11 @@ def test_runtime_staging_keeps_af3_common_but_excludes_opendde_data(
     config.runtime.opendde_source_commit = "deadbeef"
     config.runtime.esm_source_commit = "deadbeef"
 
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args[0], 0, stdout="deadbeef\n", stderr=""
-        ),
-    )
+    def fake_git(command, **_kwargs):
+        stdout = "deadbeef\n" if "rev-parse" in command else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_git)
 
     staged = prepare_runtime_build_contexts(config)
 
