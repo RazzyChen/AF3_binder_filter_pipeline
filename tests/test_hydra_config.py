@@ -336,13 +336,20 @@ def test_dry_run_resolved_config_matches_manifest_backend(tmp_path: Path) -> Non
     assert f"{database}:/db:ro" in command
 
 
-def test_preflight_failure_is_recorded_in_run_manifest(tmp_path: Path) -> None:
+def test_preflight_failure_is_recorded_in_run_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     database = _database(tmp_path / "db")
     csv_path = _csv(tmp_path / "input.csv")
     config_path = write_initial_config(
         tmp_path / "config.yaml",
         EnvironmentDetection(database_dir=str(database)),
         csv_path=str(csv_path),
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.orchestration.context.resolve_docker_image_id",
+        lambda *_args: "sha256:unit-test-image",
     )
     context = create_run_context(
         config_path,
@@ -426,13 +433,20 @@ def test_af3_external_target_data_is_externalized_into_complex_inputs(
     assert binder["pairedMsa"] == ""
 
 
-def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(tmp_path: Path) -> None:
+def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     database = _database(tmp_path / "db")
     csv_path = _csv(tmp_path / "input.csv")
     config_path = write_initial_config(
         tmp_path / "config.yaml",
         EnvironmentDetection(database_dir=str(database)),
         csv_path=str(csv_path),
+    )
+    monkeypatch.setattr(
+        "af3_binder_filter.orchestration.context.resolve_docker_image_id",
+        lambda *_args: None,
     )
     context = create_run_context(
         config_path,
@@ -452,9 +466,12 @@ def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(tmp_path: Path) -> Non
     prediction_command = (
         context.results_dir / "stages" / "03_primary_prediction" / "logs" / "prediction.command.txt"
     ).read_text()
-    assert context.config.features.image.startswith("sha256:")
+    assert context.config.features.image == "aerith/fold-runtime:local"
+    assert context.config.features.image_id is None
+    assert context.config.features.mmseqs_id.startswith(
+        "unresolved-dry-run:aerith/fold-runtime:local:mmseqs:"
+    )
     assert f" {context.config.features.image} prepare-features " in feature_command
-    assert " aerith/fold-runtime:local prepare-features " not in feature_command
     assert "--use-gpu 1" in feature_command
     assert "--name aerith-" in feature_command
     assert "GPU MMseqs2 preprocessing" in prediction_command
