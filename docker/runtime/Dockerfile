@@ -1,4 +1,5 @@
-FROM nvcr.io/nvidia/cuda:12.6.3-base-ubuntu24.04@sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e
+ARG CUDA_BASE=nvcr.io/nvidia/cuda:12.6.3-base-ubuntu24.04@sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e
+FROM ${CUDA_BASE} AS builder
 
 ARG UV_VERSION=0.11.28
 ARG UV_SHA256=e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
@@ -17,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/hmmer/bin:/usr/local/bin:/opt/conda/bin:/usr/bin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl git hmmer kalign libglib2.0-0 \
+      build-essential ca-certificates curl git kalign libglib2.0-0 \
       libgl1 libxrender1 make patch python3-pip python3.12 python3.12-dev wget zlib1g-dev zstd \
     && rm -rf /var/lib/apt/lists/*
 
@@ -110,9 +111,8 @@ RUN cd /opt/apps/esm/openfold-2.2.0 \
          --no-build-isolation --no-deps /opt/apps/esm/openfold-2.2.0 \
     && rm /tmp/openfold-cuda-11.6.patch
 
-# Protenix JIT-loads a fused layer-normalization extension on import.  Install
-# the compiler matching its cu126 Torch build and compile the extension into
-# site-packages so runtime containers never depend on a host CUDA toolkit.
+# Both Protenix and OpenDDE use fused CUDA layer-normalization. Compile the
+# extensions in the builder so inference never needs nvcc or a host toolkit.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          cuda-cccl-12-6=12.6.77-1 \
@@ -122,12 +122,21 @@ RUN apt-get update \
          cuda-nvcc-12-6=12.6.85-1 \
          cuda-nvvm-12-6=12.6.85-1 \
     && rm -rf /var/lib/apt/lists/*
-# Torch's CUDAContextLight header includes cuBLAS, cuSPARSE, and cuSOLVER.
-# Reuse the exactly pinned NVIDIA wheel headers already present in the
-# Protenix environment instead of duplicating their multi-gigabyte apt SDKs.
-RUN CPATH=/opt/conda/envs/protenix/lib/python3.12/site-packages/nvidia/cublas/include:/opt/conda/envs/protenix/lib/python3.12/site-packages/nvidia/cusparse/include:/opt/conda/envs/protenix/lib/python3.12/site-packages/nvidia/cusolver/include \
+# Torch CUDA headers include cuBLAS, cuSPARSE, and cuSOLVER. Reuse the exactly
+# pinned NVIDIA wheel headers already present in each environment.
+RUN CUDA_HOME=/usr/local/cuda-12.6 \
+    CUDACXX=/usr/local/cuda-12.6/bin/nvcc \
+    PATH=/usr/local/cuda-12.6/bin:${PATH} \
+    CPATH=/opt/conda/envs/protenix/lib/python3.12/site-packages/nvidia/cublas/include:/opt/conda/envs/protenix/lib/python3.12/site-packages/nvidia/cusparse/include:/opt/conda/envs/protenix/lib/python3.12/site-packages/nvidia/cusolver/include \
     MAX_JOBS=8 /opt/conda/bin/conda run --no-capture-output -n protenix \
-      python -c 'import protenix.model.layer_norm.layer_norm'
+      python -c 'from protenix.model.layer_norm import layer_norm; assert layer_norm.fast_layer_norm_cuda_v2 is not None'
+RUN CUDA_HOME=/usr/local/cuda-12.6 \
+    CUDACXX=/usr/local/cuda-12.6/bin/nvcc \
+    PATH=/usr/local/cuda-12.6/bin:${PATH} \
+    CPATH=/opt/envs/opendde/lib/python3.11/site-packages/nvidia/cublas/include:/opt/envs/opendde/lib/python3.11/site-packages/nvidia/cusparse/include:/opt/envs/opendde/lib/python3.11/site-packages/nvidia/cusolver/include \
+    LAYERNORM_TYPE=fast_layernorm \
+    MAX_JOBS=8 /opt/envs/opendde/bin/python -c \
+      'from opendde.model.layer_norm import layer_norm; assert layer_norm.fast_layer_norm_cuda_v2 is not None'
 
 # Install the official GPU releases requested for the offline feature and
 # clustering stages. Keep their data directories beside each binary because
@@ -171,9 +180,70 @@ RUN chmod 0755 /usr/local/bin/fold-runtime \
     && /opt/conda/bin/conda run -n protenix protenix --help >/dev/null \
     && /opt/conda/bin/conda run -n esm python -c 'import esm'
 
+# Remove build-only package caches before copying artifacts to the final image.
+RUN /opt/conda/bin/conda clean --all --yes \
+    && rm -rf /root/.cache /tmp/* /var/tmp/* \
+    && find /opt/apps -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} + \
+    && find /opt/apps -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
 ENTRYPOINT ["/usr/local/bin/fold-runtime"]
 CMD []
 
+FROM ${CUDA_BASE} AS runtime
+
+# The final image retains only runtime libraries and host-side C/C++ support
+# for framework JITs. CUDA compilation remains exclusively in the builder.
+ARG MMSEQS_VERSION=8cc5ce367b5638c4306c2d7cfc652dd099a4643f
+ARG MMSEQS_SHA256=83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7
+ARG FOLDSEEK_VERSION=941cd33ff0771cd2e3f144e3293e22a2b87e9fda
+ARG FOLDSEEK_SHA256=af7a688ffd8625b356c380380fb5650ec811262a2d18bdb0faeda95cc4894a55
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    CONDA_DIR=/opt/conda \
+    CUTLASS_PATH=/opt/cutlass \
+    LAYERNORM_TYPE=fast_layernorm \
+    XLA_FLAGS=--xla_gpu_enable_triton_gemm=false \
+    XLA_PYTHON_CLIENT_PREALLOCATE=true \
+    XLA_CLIENT_MEM_FRACTION=0.95 \
+    PATH=/hmmer/bin:/usr/local/bin:/opt/conda/bin:/usr/bin:/bin
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates gcc g++ kalign libc6-dev libglib2.0-0 libgl1 libgomp1 \
+      libstdc++6 libxrender1 make python3.12 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /hmmer /hmmer
+COPY --from=builder /opt/conda /opt/conda
+COPY --from=builder /opt/uv-python /opt/uv-python
+COPY --from=builder /opt/envs /opt/envs
+COPY --from=builder /opt/apps /opt/apps
+COPY --from=builder /opt/mmseqs /opt/mmseqs
+COPY --from=builder /opt/foldseek /opt/foldseek
+COPY --from=builder /opt/aerith /opt/aerith
+COPY --from=builder /usr/local/bin/fold-runtime /usr/local/bin/fold-runtime
+
+# OpenFold is compiled during the build. Remove its conda CUDA compiler payload
+# while retaining AF3's ptxas and Protenix Triton runtime compiler helper.
+RUN rm -f /opt/conda/envs/esm/bin/nvcc \
+          /opt/conda/envs/esm/bin/ptxas \
+          /opt/conda/envs/esm/bin/fatbinary \
+    && rm -rf /opt/conda/envs/esm/nvvm \
+    && rm -f /opt/conda/envs/esm/lib/libnvvm.so* \
+    && ln -sf /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs \
+    && ln -sf /opt/foldseek/bin/foldseek /usr/local/bin/foldseek \
+    && chmod 0755 /usr/local/bin/fold-runtime \
+    && test "$(mmseqs version)" = "${MMSEQS_VERSION}" \
+    && test "$(foldseek version)" = "${FOLDSEEK_VERSION}" \
+    && test ! -e /opt/conda/envs/esm/bin/nvcc \
+    && test ! -e /usr/local/cuda-12.6/bin/nvcc \
+    && test -n "$(find /opt/envs/af3 -type f -name ptxas -print -quit)" \
+    && /opt/envs/af3/bin/python -c 'import alphafold3' \
+    && /opt/envs/opendde/bin/python -c 'from opendde.model.layer_norm import layer_norm; assert layer_norm.fast_layer_norm_cuda_v2 is not None; import opendde' \
+    && /opt/conda/bin/conda run --no-capture-output -n protenix python -c 'from protenix.model.layer_norm import layer_norm; assert layer_norm.fast_layer_norm_cuda_v2 is not None; import protenix' \
+    && /opt/conda/bin/conda run --no-capture-output -n esm python -c 'import esm'
+
+ENTRYPOINT ["/usr/local/bin/fold-runtime"]
+CMD []
 ARG AF3_VERSION=3.0.3
 ARG PROTENIX_VERSION=2.0.0
 ARG OPENDDE_COMMIT=266ce4c49d492ad1077866000d83704999985f46

@@ -17,8 +17,8 @@ case "${tool}" in
     /opt/envs/opendde/bin/python /opt/aerith/build_local_features.py --help >/dev/null
     echo "offline feature tools ok"
     /opt/envs/af3/bin/python -c 'import alphafold3; print("af3 import ok")'
-    /opt/envs/opendde/bin/python -c 'import opendde, torch; assert torch.cuda.is_available(); print("opendde cuda ok")'
-    /opt/conda/bin/conda run --no-capture-output -n protenix python -c 'import protenix, torch; assert torch.cuda.is_available(); print("protenix cuda ok")'
+    /opt/envs/opendde/bin/python -c 'from opendde.model.layer_norm import layer_norm; assert layer_norm.fast_layer_norm_cuda_v2 is not None; import opendde, torch; assert torch.cuda.is_available(); print("opendde cuda + fused layer norm ok")'
+    /opt/conda/bin/conda run --no-capture-output -n protenix python -c 'from protenix.model.layer_norm import layer_norm; assert layer_norm.fast_layer_norm_cuda_v2 is not None; import protenix, torch; assert torch.cuda.is_available(); print("protenix cuda + fused layer norm ok")'
     /opt/conda/bin/conda run --no-capture-output -n esm python -c 'import esm, torch; assert torch.cuda.is_available(); print("esm cuda ok")'
     ;;
   af3)

@@ -155,6 +155,37 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
         build_runtime_image_command(config, source_bundle=bundle.root)
 
 
+def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
+    dockerfile = (Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile").read_text()
+    builder, runtime = dockerfile.split("FROM ${CUDA_BASE} AS runtime", maxsplit=1)
+
+    assert dockerfile.startswith("ARG CUDA_BASE=")
+    assert "FROM ${CUDA_BASE} AS builder" in builder
+    assert "cuda-nvcc-12-6" in builder
+    assert "LAYERNORM_TYPE=fast_layernorm" in builder
+    assert "from opendde.model.layer_norm import layer_norm" in builder
+    for path in (
+        "/hmmer",
+        "/opt/conda",
+        "/opt/uv-python",
+        "/opt/envs",
+        "/opt/apps",
+        "/opt/mmseqs",
+        "/opt/foldseek",
+        "/opt/aerith",
+    ):
+        assert f"COPY --from=builder {path} {path}" in runtime
+
+    assert "cuda-nvcc-12-6" not in runtime
+    assert "rm -f /opt/conda/envs/esm/bin/nvcc" in runtime
+    assert "test ! -e /usr/local/cuda-12.6/bin/nvcc" in runtime
+    assert "find /opt/envs/af3 -type f -name ptxas" in runtime
+    assert 'ENTRYPOINT ["/usr/local/bin/fold-runtime"]' in runtime
+
+    entrypoint = (Path(__file__).parents[1] / "docker" / "runtime" / "entrypoint.sh").read_text()
+    assert "fast_layer_norm_cuda_v2 is not None" in entrypoint
+
+
 _EXPORTER = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "export_runtime_image.py"))
 export_commands = _EXPORTER["export_commands"]
 export_runtime_image = _EXPORTER["export_runtime_image"]
