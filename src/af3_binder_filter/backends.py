@@ -882,6 +882,7 @@ def build_runtime_image_command(
     *,
     context_root: Path | None = None,
     source_bundle: Path | None = None,
+    build_cache_dir: Path | None = None,
 ) -> list[str]:
     """Build from local sources, staged contexts, or a verified source bundle."""
 
@@ -934,6 +935,16 @@ def build_runtime_image_command(
         )
         for name in ("NO_PROXY", "no_proxy"):
             command.extend(["--build-arg", f"{name}={direct_hosts}"])
+    if build_cache_dir is not None:
+        cache_root = build_cache_dir.expanduser().resolve()
+        command.extend(
+            [
+                "--cache-from",
+                f"type=local,src={cache_root}",
+                "--cache-to",
+                f"type=local,dest={cache_root},mode=max",
+            ]
+        )
     command.extend(
         [
             "--build-arg",

@@ -20,6 +20,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--source-bundle", type=Path, required=True)
+    parser.add_argument("--image", help="candidate image reference to tag")
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        help="persistent BuildKit local cache directory",
+    )
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -32,9 +38,14 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             overrides=args.override,
         )
+        if args.image:
+            config.backend.image = args.image
+        if args.cache_dir:
+            args.cache_dir.expanduser().resolve().mkdir(parents=True, exist_ok=True)
         command = build_runtime_image_command(
             config,
             source_bundle=args.source_bundle,
+            build_cache_dir=args.cache_dir,
         )
         print(shlex.join(command))
         if args.dry_run:

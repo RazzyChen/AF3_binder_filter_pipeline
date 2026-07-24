@@ -155,6 +155,34 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
         build_runtime_image_command(config, source_bundle=bundle.root)
 
 
+def test_build_command_accepts_candidate_tag_and_persistent_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = _runtime_sources(tmp_path)
+    config = _runtime_config(tmp_path, sources)
+    config.backend.image = "aerith/fold-runtime:ci-deadbeef"
+    monkeypatch.setattr(
+        "af3_binder_filter.backends._git_head",
+        lambda _source: "deadbeef",
+    )
+    bundle = create_runtime_source_bundle(config, tmp_path / "data" / "bundle")
+    cache = tmp_path / "buildkit-cache"
+
+    command = build_runtime_image_command(
+        config,
+        source_bundle=bundle.root,
+        build_cache_dir=cache,
+    )
+
+    assert ["--cache-from", f"type=local,src={cache.resolve()}"] == command[
+        command.index("--cache-from") : command.index("--cache-from") + 2
+    ]
+    assert ["--cache-to", f"type=local,dest={cache.resolve()},mode=max"] == command[
+        command.index("--cache-to") : command.index("--cache-to") + 2
+    ]
+    assert command[command.index("--tag") + 1] == "aerith/fold-runtime:ci-deadbeef"
+
+
 def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     dockerfile = (Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile").read_text()
     builder, runtime = dockerfile.split("FROM ${CUDA_BASE} AS runtime", maxsplit=1)
