@@ -19,22 +19,22 @@ from af3_binder_filter.io_utils import (
 )
 from af3_binder_filter.jobs import sequence_sha256
 from af3_binder_filter.target_data import extract_target_features
-from af3_binder_filter.orchestration.command_runtime import _run_prediction_command
+from af3_binder_filter.orchestration.command_runtime import run_prediction_command
 from af3_binder_filter.orchestration.context import (
     PipelineExecutionError,
     RunContext,
-    _af3_feature_fingerprint,
-    _container_name,
-    _context_feature_fingerprint,
-    _existing_or_new_manifest,
-    _expected_feature_cache_dir,
-    _runtime_gpus,
+    af3_feature_fingerprint,
+    container_name,
+    context_feature_fingerprint,
+    existing_or_new_manifest,
+    expected_feature_cache_dir,
+    runtime_gpus,
 )
 from af3_binder_filter.orchestration.feature_identity import (
-    _absolute_target_features,
-    _af3_bundle_artifact_identity,
-    _af3_bundle_from_manifest,
-    _bind_feature_content,
+    absolute_target_features,
+    af3_bundle_artifact_identity,
+    af3_bundle_from_manifest,
+    bind_feature_content,
 )
 
 
@@ -51,7 +51,7 @@ def prepare_features_stage(context: RunContext) -> FeaturePreparation:
                 " ".join(preparation.command) + "\n",
             )
         return preparation
-    feature_gpu = _runtime_gpus(
+    feature_gpu = runtime_gpus(
         context,
         job_count=1,
         stage_name="features",
@@ -62,7 +62,7 @@ def prepare_features_stage(context: RunContext) -> FeaturePreparation:
         dry_run=context.config.runtime.dry_run,
         force=context.config.runtime.force,
         gpu_index=feature_gpu.index,
-        container_name=_container_name(
+        container_name=container_name(
             context,
             "feature-builder",
             feature_gpu.index,
@@ -79,15 +79,15 @@ def prepare_features_stage(context: RunContext) -> FeaturePreparation:
 
 
 def run_prepare_features_only(context: RunContext) -> FeaturePreparation:
-    feature_fingerprint = _context_feature_fingerprint(context)
-    manifest = _existing_or_new_manifest(context, feature_fingerprint)
+    feature_fingerprint = context_feature_fingerprint(context)
+    manifest = existing_or_new_manifest(context, feature_fingerprint)
     manifest.stage_status["features"] = "running"
     manifest.status = "running"
     manifest.write(context.manifest_path)
     try:
         preparation = prepare_features_stage(context)
         if preparation.bundle is not None:
-            _bind_feature_content(manifest, preparation.bundle)
+            bind_feature_content(manifest, preparation.bundle)
         manifest.stage_status["features"] = (
             "dry_run" if context.config.runtime.dry_run else "success"
         )
@@ -115,15 +115,15 @@ def run_prepare_features_only(context: RunContext) -> FeaturePreparation:
 def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
     config = context.config
     target_sequence = context.plan.target_sequence
-    fingerprint = _context_feature_fingerprint(context)
-    if fingerprint != _af3_feature_fingerprint(config, target_sequence):
+    fingerprint = context_feature_fingerprint(context)
+    if fingerprint != af3_feature_fingerprint(config, target_sequence):
         raise PipelineExecutionError("AF3 target feature fingerprint changed during setup")
-    cache_dir = _expected_feature_cache_dir(
+    cache_dir = expected_feature_cache_dir(
         config,
         target_sequence,
         fingerprint=fingerprint,
     )
-    cached = None if config.runtime.force else _af3_bundle_from_manifest(
+    cached = None if config.runtime.force else af3_bundle_from_manifest(
         cache_dir,
         target_sequence=target_sequence,
         fingerprint=fingerprint,
@@ -161,7 +161,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
             seed=config.project.seed,
             force=True,
         )
-        feature_gpu = _runtime_gpus(
+        feature_gpu = runtime_gpus(
             context,
             job_count=1,
             stage_name="features",
@@ -172,7 +172,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
             input_dir=input_dir,
             output_dir=output_dir,
             gpu_index=gpu_index,
-            container_name=_container_name(
+            container_name=container_name(
                 context,
                 "target_features",
                 gpu_index,
@@ -180,7 +180,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
         )
         if config.runtime.dry_run:
             return FeaturePreparation(None, tuple(command), reused=False)
-        return_code = _run_prediction_command(
+        return_code = run_prediction_command(
             context,
             command,
             name="target_features",
@@ -213,7 +213,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
             expected_sequence=target_sequence,
             force=True,
         )
-        absolute_features = _absolute_target_features(extracted, cache_dir)
+        absolute_features = absolute_target_features(extracted, cache_dir)
         target_payload = json.loads(source_data.read_text(encoding="utf-8"))
         atomic_write_json(cache_dir / "target_data.json", target_payload)
         bundle = AF3FeatureBundle(
@@ -239,7 +239,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
                     "paired_msa_path": absolute_features.paired_msa_path,
                     "templates": absolute_features.templates,
                 },
-                "artifact_identity": _af3_bundle_artifact_identity(bundle),
+                "artifact_identity": af3_bundle_artifact_identity(bundle),
             },
         )
         return FeaturePreparation(

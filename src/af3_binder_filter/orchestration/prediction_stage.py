@@ -41,23 +41,23 @@ from af3_binder_filter.progress import (
 )
 from af3_binder_filter.secondary_features import SecondaryFeatureBundle
 from af3_binder_filter.orchestration.command_runtime import (
-    _file_signature,
-    _path_belongs_to_job,
-    _return_code_failure_message,
-    _run_sharded_commands,
-    _small_json_is_complete,
-    _stable_completion_probe,
+    file_signature,
+    path_belongs_to_job,
+    return_code_failure_message,
+    run_sharded_commands,
+    small_json_is_complete,
+    stable_completion_probe,
 )
 from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
-    _container_name,
-    _record_gpu_assignments,
-    _runtime_gpus,
+    container_name,
+    record_gpu_assignments,
+    runtime_gpus,
     plan_gpu_job_shards,
 )
 from af3_binder_filter.orchestration.feature_identity import (
-    _prediction_feature_identity,
+    prediction_feature_identity,
 )
 
 
@@ -67,7 +67,7 @@ def _input_for_job(input_paths: Sequence[Path], job: JobSpec, backend: str) -> P
     return input_paths[0]
 
 
-def _legacy_output_valid(
+def legacy_output_valid(
     job: JobSpec,
     input_path: Path,
     prediction: UnifiedPrediction,
@@ -82,7 +82,7 @@ def _legacy_output_valid(
     )
 
 
-def _backend_job_fingerprint(
+def backend_job_fingerprint(
     context: RunContext,
     job: JobSpec,
     feature_fingerprint: str,
@@ -124,7 +124,7 @@ def _reusable_predictions(
     reusable: dict[str, UnifiedPrediction] = {}
     pending: list[JobSpec] = []
     for job in jobs:
-        fingerprint = _backend_job_fingerprint(
+        fingerprint = backend_job_fingerprint(
             context,
             job,
             feature_fingerprint,
@@ -145,7 +145,7 @@ def _reusable_predictions(
             job_manifest is None
             and context.config.project.adopt_legacy
             and parsed.status == "success"
-            and _legacy_output_valid(
+            and legacy_output_valid(
                 job,
                 _input_for_job(input_paths, job, backend.name),
                 parsed,
@@ -191,13 +191,13 @@ def _prediction_completion_signature(
     summaries = [
         path
         for path in set(summaries)
-        if _path_belongs_to_job(path, job.job_id)
-        and _small_json_is_complete(path)
+        if path_belongs_to_job(path, job.job_id)
+        and small_json_is_complete(path)
     ]
     models = [
         path
         for path in set(models)
-        if _path_belongs_to_job(path, job.job_id)
+        if path_belongs_to_job(path, job.job_id)
         and path.is_file()
         and path.stat().st_size > 0
     ]
@@ -208,7 +208,7 @@ def _prediction_completion_signature(
         confidences = [
             path
             for path in set(confidences)
-            if _path_belongs_to_job(path, job.job_id)
+            if path_belongs_to_job(path, job.job_id)
             and path.is_file()
             and path.stat().st_size > 0
         ]
@@ -217,7 +217,7 @@ def _prediction_completion_signature(
             return ()
         required.extend(confidences)
         required.append(ranking)
-    return _file_signature(required)
+    return file_signature(required)
 
 
 def _prediction_artifact_signature(
@@ -266,7 +266,7 @@ def prediction_stage(
     output_root = (
         Path(context.config.project.output_dir) / context.run_id / backend.name
     )
-    prediction_feature_identity = _prediction_feature_identity(target_features)
+    prediction_feature_identity = prediction_feature_identity(target_features)
     reusable, pending = _reusable_predictions(
         context,
         input_paths,
@@ -306,13 +306,13 @@ def prediction_stage(
         execution_root = input_dir / "pending" / pending_key
         shards = plan_gpu_job_shards(
             pending,
-            _runtime_gpus(
+            runtime_gpus(
                 context,
                 job_count=len(pending),
                 stage_name=stage_name,
             ),
         )
-        _record_gpu_assignments(
+        record_gpu_assignments(
             manifest,
             context.manifest_path,
             stage_name,
@@ -342,7 +342,7 @@ def prediction_stage(
                     and target_features.templates_enabled
                     else None
                 ),
-                container_name=_container_name(
+                container_name=container_name(
                     context,
                     stage_name,
                     shard.gpu.index,
@@ -350,7 +350,7 @@ def prediction_stage(
             )
             commands.append((shard, command))
         pending_by_id = {job.job_id: job for job in pending}
-        completion_probe = _stable_completion_probe(
+        completion_probe = stable_completion_probe(
             tuple(pending_by_id),
             lambda job_id: _prediction_completion_signature(
                 backend.name,
@@ -358,7 +358,7 @@ def prediction_stage(
                 output_root,
             ),
         )
-        return_codes, command_errors = _run_sharded_commands(
+        return_codes, command_errors = run_sharded_commands(
             context,
             stage_name,
             commands,
@@ -376,7 +376,7 @@ def prediction_stage(
         for gpu_index, return_code in sorted(return_codes.items()):
             if return_code != 0:
                 manifest.errors.append(
-                    _return_code_failure_message(
+                    return_code_failure_message(
                         stage_name,
                         gpu_index,
                         return_code,
@@ -426,7 +426,7 @@ def prediction_stage(
             write_job_manifest(
                 job_dir,
                 job=job,
-                fingerprint=_backend_job_fingerprint(
+                fingerprint=backend_job_fingerprint(
                     context,
                     job,
                     prediction_feature_identity,
@@ -462,12 +462,12 @@ def prediction_stage(
     )
     atomic_write_csv(
         context.layout.stage(stage_name).tables / "predictions.csv",
-        _prediction_rows(active_jobs, predictions),
+        prediction_rows(active_jobs, predictions),
     )
     return predictions, stage_failed
 
 
-def _prediction_rows(
+def prediction_rows(
     jobs: Sequence[JobSpec],
     predictions: Sequence[UnifiedPrediction],
 ) -> list[dict[str, Any]]:

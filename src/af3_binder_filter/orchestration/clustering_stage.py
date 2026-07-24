@@ -25,9 +25,9 @@ from af3_binder_filter.orchestration.context import (
     ClusteringOutcome,
     GpuJobShard,
     RunContext,
-    _container_name,
-    _record_gpu_assignments,
-    _runtime_gpus,
+    container_name,
+    record_gpu_assignments,
+    runtime_gpus,
 )
 
 
@@ -69,7 +69,7 @@ def clustering_stage(
     binder_cluster_tsv = Path(str(binder_prefix) + "_cluster.tsv")
     complex_cluster_tsv = Path(str(complex_prefix) + "_cluster.tsv")
     requested_workers = min(2, context.config.clustering.max_workers)
-    gpus = _runtime_gpus(
+    gpus = runtime_gpus(
         context,
         job_count=requested_workers,
         stage_name="clustering",
@@ -77,7 +77,7 @@ def clustering_stage(
     binder_gpu = gpus[0]
     complex_gpu = gpus[1] if len(gpus) > 1 else gpus[0]
     if manifest is not None:
-        _record_gpu_assignments(
+        record_gpu_assignments(
             manifest,
             context.manifest_path,
             "clustering",
@@ -94,7 +94,7 @@ def clustering_stage(
         gpu_index=binder_gpu.index,
         input_dir=binder_dir,
         execution_dir=foldseek_result_dir,
-        container_name=_container_name(context, "foldseek-binder", binder_gpu.index),
+        container_name=container_name(context, "foldseek-binder", binder_gpu.index),
     )
     complex_command = build_foldseek_container_command(
         context.config.clustering,
@@ -104,7 +104,7 @@ def clustering_stage(
         gpu_index=complex_gpu.index,
         input_dir=complex_dir,
         execution_dir=foldseek_result_dir,
-        container_name=_container_name(context, "foldseek-complex", complex_gpu.index),
+        container_name=container_name(context, "foldseek-complex", complex_gpu.index),
     )
 
     def execute_foldseek(

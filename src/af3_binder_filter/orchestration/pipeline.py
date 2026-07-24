@@ -41,42 +41,42 @@ from af3_binder_filter.secondary_features import (
 )
 
 from af3_binder_filter.orchestration.clustering_stage import clustering_stage
-from af3_binder_filter.orchestration.command_runtime import _run_sharded_commands
+from af3_binder_filter.orchestration.command_runtime import run_sharded_commands
 from af3_binder_filter.orchestration.context import (
     ClusteringOutcome,
     GpuJobShard,
     PipelineExecutionError,
     RunContext,
-    _container_name,
-    _context_feature_fingerprint,
-    _existing_or_new_manifest,
-    _pipeline_stage_specs,
-    _record_gpu_assignments,
-    _runtime_gpus,
+    container_name,
+    context_feature_fingerprint,
+    existing_or_new_manifest,
+    pipeline_stage_specs,
+    record_gpu_assignments,
+    runtime_gpus,
     plan_gpu_job_shards,
 )
 from af3_binder_filter.orchestration.esm_stage import esm_stage
 from af3_binder_filter.orchestration.feature_identity import (
-    _bind_feature_content,
-    _target_feature_cache_hit,
+    bind_feature_content,
+    target_feature_cache_hit,
 )
 from af3_binder_filter.orchestration.feature_stage import prepare_features_stage
 from af3_binder_filter.orchestration.interface_stage import (
-    _interface_stage_failed,
+    interface_stage_failed,
     interface_stage,
 )
 from af3_binder_filter.orchestration.prediction_stage import (
-    _prediction_rows,
+    prediction_rows,
     prediction_stage,
 )
 from af3_binder_filter.orchestration.resume import (
-    _persist_clustering_inputs,
-    _validated_clustering_inputs,
+    persist_clustering_inputs,
+    validated_clustering_inputs,
 )
 from af3_binder_filter.orchestration.selection import (
-    _effective_predictions_from_rows,
-    _final_sort_key,
-    _merge_rows_by_job,
+    effective_predictions_from_rows,
+    final_sort_key,
+    merge_rows_by_job,
     secondary_gate_job_ids,
 )
 
@@ -115,7 +115,7 @@ class PipelineRunner:
     ) -> None:
         self.context = context
         self.reporter = reporter or NullProgressReporter()
-        self.stage_specs = _pipeline_stage_specs(context.config)
+        self.stage_specs = pipeline_stage_specs(context.config)
         self.active_stage: str | None = None
         self.pipeline_reported = False
         self._state: PipelineState | None = None
@@ -169,8 +169,8 @@ class PipelineRunner:
         )
 
     def _initialize_state(self) -> None:
-        expected = _context_feature_fingerprint(self.context)
-        manifest = _existing_or_new_manifest(self.context, expected)
+        expected = context_feature_fingerprint(self.context)
+        manifest = existing_or_new_manifest(self.context, expected)
         manifest.write(self.context.manifest_path)
         self._state = PipelineState(expected, manifest)
 
@@ -235,7 +235,7 @@ class PipelineRunner:
         self._start_stage("features")
         manifest.stage_status["features"] = "running"
         manifest.write(self.context.manifest_path)
-        cache_hit = _target_feature_cache_hit(self.context)
+        cache_hit = target_feature_cache_hit(self.context)
         self.reporter.cache_status(
             "features",
             hits=int(cache_hit),
@@ -273,7 +273,7 @@ class PipelineRunner:
             raise PipelineExecutionError(
                 "primary AF3 preparation did not return compatible local features"
             )
-        _bind_feature_content(manifest, bundle)
+        bind_feature_content(manifest, bundle)
         self.state.primary_features = bundle
         manifest.stage_status["features"] = "success"
         manifest.write(self.context.manifest_path)
@@ -317,13 +317,13 @@ class PipelineRunner:
             )
             shards = plan_gpu_job_shards(
                 context.plan.jobs,
-                _runtime_gpus(
+                runtime_gpus(
                     context,
                     job_count=len(context.plan.jobs),
                     stage_name="primary_prediction",
                 ),
             )
-            _record_gpu_assignments(
+            record_gpu_assignments(
                 manifest,
                 context.manifest_path,
                 "primary_prediction",
@@ -354,7 +354,7 @@ class PipelineRunner:
                             gpu_index=shard.gpu.index,
                             feature_dir=preparation.bundle.cache_dir,
                             backend_settings=config.backend,
-                            container_name=_container_name(
+                            container_name=container_name(
                                 context,
                                 "primary_prediction",
                                 shard.gpu.index,
@@ -362,7 +362,7 @@ class PipelineRunner:
                         ),
                     )
                 )
-            _run_sharded_commands(context, "primary_prediction", commands)
+            run_sharded_commands(context, "primary_prediction", commands)
             primary_logs = context.layout.stage("primary_prediction").logs
             shutil.copy2(
                 primary_logs / "primary_prediction.command.txt",
@@ -430,13 +430,13 @@ class PipelineRunner:
         if config.scoring.esm.esmfold:
             shards = plan_gpu_job_shards(
                 context.plan.jobs,
-                _runtime_gpus(
+                runtime_gpus(
                     context,
                     job_count=len(context.plan.jobs),
                     stage_name="esmfold",
                 ),
             )
-            _record_gpu_assignments(
+            record_gpu_assignments(
                 manifest,
                 context.manifest_path,
                 "esmfold",
@@ -455,7 +455,7 @@ class PipelineRunner:
                             input_dir=shard_input,
                             output_dir=shard_output,
                             gpu_index=shard.gpu.index,
-                            container_name=_container_name(
+                            container_name=container_name(
                                 context,
                                 "esmfold",
                                 shard.gpu.index,
@@ -463,7 +463,7 @@ class PipelineRunner:
                         ),
                     )
                 )
-            _run_sharded_commands(
+            run_sharded_commands(
                 context,
                 "esmfold",
                 commands,
@@ -498,7 +498,7 @@ class PipelineRunner:
 
     def _run_primary_interface(self) -> None:
         state = self.state
-        state.primary_rows = _prediction_rows(
+        state.primary_rows = prediction_rows(
             self.context.plan.jobs,
             state.primary_predictions,
         )
@@ -513,7 +513,7 @@ class PipelineRunner:
             write_outputs=True,
             reporter=self.reporter,
         )
-        failed = _interface_stage_failed(
+        failed = interface_stage_failed(
             state.primary_rows,
             energy_engine=self.context.config.interface.energy_engine,
         )
@@ -616,7 +616,7 @@ class PipelineRunner:
                 reporter=self.reporter,
             )
             state.secondary_predictions = predictions
-            state.secondary_rows = _prediction_rows(
+            state.secondary_rows = prediction_rows(
                 state.eligible_jobs,
                 state.secondary_predictions,
             )
@@ -678,7 +678,7 @@ class PipelineRunner:
                 skipped=0,
                 detail="no eligible jobs",
             )
-        failed = _interface_stage_failed(
+        failed = interface_stage_failed(
             state.secondary_rows,
             energy_engine=self.context.config.interface.energy_engine,
         )
@@ -747,7 +747,7 @@ class PipelineRunner:
         state.required_failure |= failed
         self._annotate_candidate_pool(final_rows)
         state.final_rows = [apply_effective_backend(row) for row in final_rows]
-        state.effective_predictions = _effective_predictions_from_rows(
+        state.effective_predictions = effective_predictions_from_rows(
             context.plan.jobs,
             state.final_rows,
         )
@@ -858,8 +858,8 @@ class PipelineRunner:
                 structure_rows=state.final_rows,
             )
             state.manifest.stage_status["esm"] = "disabled"
-        state.final_rows = _merge_rows_by_job(state.final_rows, esm_rows)
-        state.final_rows.sort(key=_final_sort_key)
+        state.final_rows = merge_rows_by_job(state.final_rows, esm_rows)
+        state.final_rows.sort(key=final_sort_key)
         state.candidates = [
             row for row in state.final_rows if row.get("candidate_pool")
         ]
@@ -868,8 +868,8 @@ class PipelineRunner:
     def _run_clustering(self) -> None:
         context = self.context
         state = self.state
-        _persist_clustering_inputs(context, state.final_rows, state.manifest)
-        _all_rows, clustering_candidates = _validated_clustering_inputs(
+        persist_clustering_inputs(context, state.final_rows, state.manifest)
+        _all_rows, clustering_candidates = validated_clustering_inputs(
             context,
             state.manifest,
         )
@@ -883,7 +883,7 @@ class PipelineRunner:
             job for job in context.plan.jobs if job.job_id in candidate_ids
         )
         cluster_predictions = tuple(
-            _effective_predictions_from_rows(cluster_jobs, clustering_candidates)
+            effective_predictions_from_rows(cluster_jobs, clustering_candidates)
         )
         detail = (
             f"{len(cluster_jobs)} candidates / "

@@ -24,12 +24,12 @@ from af3_binder_filter.secondary_features import (
 )
 from af3_binder_filter.orchestration.context import (
     RunContext,
-    _context_feature_fingerprint,
-    _expected_feature_cache_dir,
+    context_feature_fingerprint,
+    expected_feature_cache_dir,
 )
 
 
-def _target_feature_cache_hit(context: RunContext) -> bool:
+def target_feature_cache_hit(context: RunContext) -> bool:
     """Return whether the exact target feature bundle is reusable."""
 
     if context.config.runtime.force:
@@ -38,10 +38,10 @@ def _target_feature_cache_hit(context: RunContext) -> bool:
         context.config.backend.name == "alphafold3"
         and context.config.backend.target_data_json
     ):
-        fingerprint = _context_feature_fingerprint(context)
+        fingerprint = context_feature_fingerprint(context)
         return (
-            _af3_bundle_from_manifest(
-                _expected_feature_cache_dir(
+            af3_bundle_from_manifest(
+                expected_feature_cache_dir(
                     context.config,
                     context.plan.target_sequence,
                     fingerprint=fingerprint,
@@ -61,7 +61,7 @@ def _target_feature_cache_hit(context: RunContext) -> bool:
     )
 
 
-def _absolute_target_features(
+def absolute_target_features(
     features: TargetFeatures,
     root: Path,
 ) -> TargetFeatures:
@@ -83,7 +83,7 @@ def _absolute_target_features(
     )
 
 
-def _af3_bundle_from_manifest(
+def af3_bundle_from_manifest(
     cache_dir: Path,
     *,
     target_sequence: str,
@@ -114,16 +114,16 @@ def _af3_bundle_from_manifest(
         bundle.validate()
     except Exception:
         return None
-    if payload.get("artifact_identity") != _af3_bundle_artifact_identity(bundle):
+    if payload.get("artifact_identity") != af3_bundle_artifact_identity(bundle):
         return None
     return bundle
 
 
-def _af3_bundle_artifact_identity(bundle: AF3FeatureBundle) -> dict[str, Any]:
+def af3_bundle_artifact_identity(bundle: AF3FeatureBundle) -> dict[str, Any]:
     return dict(af3_feature_bundle_artifact_identity(bundle))
 
 
-def _bind_feature_content(
+def bind_feature_content(
     manifest: RunManifest,
     bundle: FeatureBundle | AF3FeatureBundle,
 ) -> str:
@@ -135,7 +135,7 @@ def _bind_feature_content(
     return digest
 
 
-def _prediction_feature_identity(
+def prediction_feature_identity(
     bundle: FeatureBundle | AF3FeatureBundle | SecondaryFeatureBundle,
 ) -> str:
     """Bind prediction reuse to generation settings and exact feature bytes."""
@@ -158,10 +158,10 @@ def _prediction_feature_identity(
     )
 
 
-def _primary_prediction_feature_identity(context: RunContext) -> str:
+def primary_prediction_feature_identity(context: RunContext) -> str:
     """Recover the exact primary feature identity for standalone validation."""
 
-    feature_fingerprint = _context_feature_fingerprint(context)
+    feature_fingerprint = context_feature_fingerprint(context)
     manifest_path = getattr(context, "manifest_path", None)
     payload = load_manifest(manifest_path) if isinstance(manifest_path, Path) else None
     content_sha256 = (

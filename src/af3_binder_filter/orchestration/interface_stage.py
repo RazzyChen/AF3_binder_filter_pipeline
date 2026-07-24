@@ -205,7 +205,7 @@ def interface_stage(
     return ranked
 
 
-def _interface_stage_failed(
+def interface_stage_failed(
     rows: Sequence[dict[str, Any]], *, energy_engine: str
 ) -> bool:
     """Propagate both geometry and configured energy-substage failures."""

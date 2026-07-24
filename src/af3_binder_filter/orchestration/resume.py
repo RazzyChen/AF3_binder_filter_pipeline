@@ -37,24 +37,24 @@ from af3_binder_filter.orchestration.context import (
     ClusteringOutcome,
     PipelineExecutionError,
     RunContext,
-    _context_feature_fingerprint,
-    _existing_or_new_manifest,
+    context_feature_fingerprint,
+    existing_or_new_manifest,
 )
 from af3_binder_filter.orchestration.feature_identity import (
-    _primary_prediction_feature_identity,
+    primary_prediction_feature_identity,
 )
 from af3_binder_filter.orchestration.interface_stage import (
-    _interface_stage_failed,
+    interface_stage_failed,
     interface_stage,
 )
 from af3_binder_filter.orchestration.prediction_stage import (
-    _backend_job_fingerprint,
-    _legacy_output_valid,
-    _prediction_rows,
+    backend_job_fingerprint,
+    legacy_output_valid,
+    prediction_rows,
 )
 from af3_binder_filter.orchestration.selection import (
-    _effective_predictions_from_rows,
-    _final_sort_key,
+    effective_predictions_from_rows,
+    final_sort_key,
 )
 
 
@@ -67,7 +67,7 @@ def load_predictions_for_context(
         / context.run_id
         / context.config.backend.name
     )
-    feature_fingerprint = _primary_prediction_feature_identity(context)
+    feature_fingerprint = primary_prediction_feature_identity(context)
     input_dir = (
         Path(context.config.project.work_dir)
         / context.run_id
@@ -83,7 +83,7 @@ def load_predictions_for_context(
         # Keep standalone stages on the exact same artifact identity contract
         # used by prediction_stage().  A hand-copied subset previously omitted
         # the checkpoint field and rejected every valid job manifest.
-        fingerprint = _backend_job_fingerprint(
+        fingerprint = backend_job_fingerprint(
             context,
             job,
             feature_fingerprint,
@@ -102,7 +102,7 @@ def load_predictions_for_context(
                 else input_dir / f"{context.config.backend.name}_jobs.json"
             )
             if input_path.is_file():
-                adopted = _legacy_output_valid(job, input_path, parsed)
+                adopted = legacy_output_valid(job, input_path, parsed)
         structure_valid = (
             parsed.best_model_path is not None
             and structure_has_chains(
@@ -144,12 +144,12 @@ def load_predictions_for_context(
                 },
             )
         predictions.append(parsed)
-    return predictions, _prediction_rows(context.plan.jobs, predictions)
+    return predictions, prediction_rows(context.plan.jobs, predictions)
 
 
 def run_interface_only(context: RunContext) -> list[dict[str, Any]]:
-    feature_fingerprint = _context_feature_fingerprint(context)
-    manifest = _existing_or_new_manifest(context, feature_fingerprint)
+    feature_fingerprint = context_feature_fingerprint(context)
+    manifest = existing_or_new_manifest(context, feature_fingerprint)
     manifest.stage_status["primary_interface"] = "running"
     manifest.status = "running"
     manifest.write(context.manifest_path)
@@ -174,7 +174,7 @@ def run_interface_only(context: RunContext) -> list[dict[str, Any]]:
         manifest.artifact_sha256["backend_review"] = (
             file_sha256(context.layout.backend_review) or ""
         )
-        failed = _interface_stage_failed(
+        failed = interface_stage_failed(
             rows,
             energy_engine=context.config.interface.energy_engine,
         )
@@ -216,14 +216,14 @@ def _clustering_input_paths(context: RunContext) -> tuple[Path, Path]:
     return tables / "clustering_input.csv", tables / "clustering_candidates.csv"
 
 
-def _persist_clustering_inputs(
+def persist_clustering_inputs(
     context: RunContext,
     rows: Sequence[dict[str, Any]],
     manifest: RunManifest,
 ) -> None:
     """Commit the complete post-ESM table and its candidate projection."""
 
-    ordered = sorted((dict(row) for row in rows), key=_final_sort_key)
+    ordered = sorted((dict(row) for row in rows), key=final_sort_key)
     candidates = [row for row in ordered if _row_truthy(row.get("candidate_pool"))]
     fieldnames = sorted({key for row in ordered for key in row})
     all_path, candidate_path = _clustering_input_paths(context)
@@ -263,7 +263,7 @@ def _row_truthy(value: Any) -> bool:
     return bool(value)
 
 
-def _validated_clustering_inputs(
+def validated_clustering_inputs(
     context: RunContext,
     manifest: RunManifest,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -393,11 +393,11 @@ def _validated_clustering_inputs(
 
 
 def run_clustering_only(context: RunContext) -> bool:
-    feature_fingerprint = _context_feature_fingerprint(context)
-    manifest = _existing_or_new_manifest(context, feature_fingerprint)
+    feature_fingerprint = context_feature_fingerprint(context)
+    manifest = existing_or_new_manifest(context, feature_fingerprint)
     stage_started = False
     try:
-        all_rows, selected_rows = _validated_clustering_inputs(context, manifest)
+        all_rows, selected_rows = validated_clustering_inputs(context, manifest)
         stage_started = True
         manifest.stage_status["clustering"] = "running"
         manifest.status = "running"
@@ -405,7 +405,7 @@ def run_clustering_only(context: RunContext) -> bool:
         selected_ids = {str(row["job_name"]) for row in selected_rows}
         jobs = tuple(job for job in context.plan.jobs if job.job_id in selected_ids)
         selected_predictions = tuple(
-            _effective_predictions_from_rows(jobs, selected_rows)
+            effective_predictions_from_rows(jobs, selected_rows)
         )
         outcome = (
             clustering_stage(

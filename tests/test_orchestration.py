@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
+from pathlib import Path
 import pytest
 
 from af3_binder_filter.config import AerithConfig
@@ -75,3 +77,24 @@ def test_pipeline_is_owned_by_the_pipeline_module() -> None:
 
 def test_deprecated_workflow_module_is_absent() -> None:
     assert importlib.util.find_spec("af3_binder_filter.workflow") is None
+
+
+def test_production_orchestration_does_not_import_private_cross_module_symbols() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "af3_binder_filter" / "orchestration"
+    violations: list[str] = []
+    for source in sorted(root.glob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if not (
+                isinstance(node.module, str)
+                and node.module.startswith("af3_binder_filter.orchestration")
+            ):
+                continue
+            private_names = [alias.name for alias in node.names if alias.name.startswith("_")]
+            if private_names:
+                violations.append(
+                    f"{source.name}: {', '.join(private_names)}"
+                )
+    assert not violations, "\n".join(violations)

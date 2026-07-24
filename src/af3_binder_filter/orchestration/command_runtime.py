@@ -39,7 +39,7 @@ def _command_stage_name(name: str) -> str:
     return name
 
 
-def _run_prediction_command(
+def run_prediction_command(
     context: RunContext,
     command: Sequence[str],
     *,
@@ -68,7 +68,7 @@ def _run_prediction_command(
     return outcome.returncode
 
 
-def _run_sharded_commands(
+def run_sharded_commands(
     context: RunContext,
     stage_name: str,
     commands: Sequence[tuple[GpuJobShard, Sequence[str]]],
@@ -174,7 +174,7 @@ def _run_sharded_commands(
     return return_codes, [errors_by_gpu[index] for index in sorted(errors_by_gpu)]
 
 
-def _return_code_failure_message(
+def return_code_failure_message(
     stage_name: str,
     gpu_index: int,
     return_code: int | None,
@@ -184,7 +184,7 @@ def _return_code_failure_message(
     return f"{stage_name} GPU {gpu_index} command returned {return_code}"
 
 
-def _file_signature(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
+def file_signature(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
     signature: list[tuple[str, int, int]] = []
     for path in sorted(set(paths)):
         try:
@@ -196,14 +196,14 @@ def _file_signature(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
     return tuple(signature)
 
 
-def _small_json_is_complete(path: Path) -> bool:
+def small_json_is_complete(path: Path) -> bool:
     try:
         return isinstance(json.loads(path.read_text(encoding="utf-8")), dict)
     except (OSError, json.JSONDecodeError):
         return False
 
 
-def _path_belongs_to_job(path: Path, job_id: str) -> bool:
+def path_belongs_to_job(path: Path, job_id: str) -> bool:
     return (
         job_id in path.parts
         or path.stem == job_id
@@ -211,7 +211,7 @@ def _path_belongs_to_job(path: Path, job_id: str) -> bool:
     )
 
 
-def _stable_completion_probe(
+def stable_completion_probe(
     keys: Sequence[str],
     signature: Callable[[str], tuple[tuple[str, int, int], ...]],
 ) -> Callable[[], int]:

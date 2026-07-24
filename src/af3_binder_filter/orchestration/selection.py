@@ -12,7 +12,7 @@ from af3_binder_filter.backends import UnifiedPrediction
 from af3_binder_filter.jobs import JobSpec
 
 
-def _merge_rows_by_job(
+def merge_rows_by_job(
     rows: Sequence[dict[str, Any]], additions: Sequence[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     by_job = {str(row["job_name"]): row for row in additions}
@@ -27,7 +27,7 @@ def _optional_float(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def _effective_predictions_from_rows(
+def effective_predictions_from_rows(
     jobs: Sequence[JobSpec], rows: Sequence[dict[str, Any]]
 ) -> list[UnifiedPrediction]:
     """Materialize the selected backend as the one-structure adapter contract."""
@@ -55,7 +55,7 @@ def _effective_predictions_from_rows(
     return predictions
 
 
-def _final_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+def final_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     def number(name: str, default: float) -> float:
         try:
             value = float(row.get(name))

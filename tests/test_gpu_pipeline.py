@@ -16,11 +16,11 @@ from af3_binder_filter.gpu import GPUInfo
 from af3_binder_filter.jobs import JobPlan, JobSpec
 from af3_binder_filter.manifest import RunManifest
 from af3_binder_filter.orchestration.clustering_stage import clustering_stage
-from af3_binder_filter.orchestration.command_runtime import _run_sharded_commands
+from af3_binder_filter.orchestration.command_runtime import run_sharded_commands
 from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
-    _runtime_gpus,
+    runtime_gpus,
     plan_gpu_job_shards,
 )
 from af3_binder_filter.orchestration.esm_stage import esm_stage
@@ -113,7 +113,7 @@ def test_runtime_gpu_selection_filters_busy_and_disallowed_devices(
         ],
     )
 
-    selected = _runtime_gpus(
+    selected = runtime_gpus(
         context,
         job_count=4,
         stage_name="primary_prediction",
@@ -142,7 +142,7 @@ def test_sharded_runner_preserves_negative_return_codes(
                 dry_run=dry_run,
             )
 
-    return_codes, errors = _run_sharded_commands(
+    return_codes, errors = run_sharded_commands(
         context,
         "prediction",
         [
@@ -172,7 +172,7 @@ def test_sharded_dry_run_writes_aggregate_and_per_gpu_command_records(
     context.config.runtime.dry_run = True
     shard = GpuJobShard(_gpu(0), context.plan.jobs)
 
-    return_codes, errors = _run_sharded_commands(
+    return_codes, errors = run_sharded_commands(
         context,
         "prediction",
         [(shard, ["docker", "run", "image name", "argument with spaces"])],
@@ -196,7 +196,7 @@ def test_sharded_timeout_preserves_real_signal_and_reaps_process(
     shard = GpuJobShard(_gpu(0), context.plan.jobs)
     executor = LocalCommandExecutor(termination_grace_seconds=0.05)
 
-    return_codes, errors = _run_sharded_commands(
+    return_codes, errors = run_sharded_commands(
         context,
         "prediction",
         [(shard, [sys.executable, "-c", "import time; time.sleep(30)"])],
@@ -233,7 +233,7 @@ def test_sharded_keyboard_interrupt_cancels_every_active_process(
         interrupt_after_start,
     )
     with pytest.raises(KeyboardInterrupt):
-        _run_sharded_commands(
+        run_sharded_commands(
             context,
             "prediction",
             [
@@ -415,7 +415,7 @@ def test_esm_stage_forwards_configured_timeout_to_shard_executor(
         ),
     )
     monkeypatch.setattr(
-        "af3_binder_filter.orchestration.esm_stage._runtime_gpus",
+        "af3_binder_filter.orchestration.esm_stage.runtime_gpus",
         lambda *_args, **_kwargs: [_gpu(0)],
     )
 
@@ -424,7 +424,7 @@ def test_esm_stage_forwards_configured_timeout_to_shard_executor(
         return {0: 0}, []
 
     monkeypatch.setattr(
-        "af3_binder_filter.orchestration.esm_stage._run_sharded_commands",
+        "af3_binder_filter.orchestration.esm_stage.run_sharded_commands",
         run_shards,
     )
     monkeypatch.setattr(

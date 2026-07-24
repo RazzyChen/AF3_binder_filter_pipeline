@@ -22,7 +22,7 @@ from af3_binder_filter.orchestration.context import (
     PipelineExecutionError,
     create_run_context,
 )
-from af3_binder_filter.orchestration.prediction_stage import _backend_job_fingerprint
+from af3_binder_filter.orchestration.prediction_stage import backend_job_fingerprint
 from af3_binder_filter.orchestration.resume import (
     load_predictions_for_context,
     run_clustering_only,
@@ -52,11 +52,11 @@ def test_backend_job_fingerprint_uses_actual_backend_feature_bundle() -> None:
         "opendde_v1",
     )
 
-    first = _backend_job_fingerprint(context, job, "secondary-features-a", backend)
-    second = _backend_job_fingerprint(context, job, "secondary-features-b", backend)
+    first = backend_job_fingerprint(context, job, "secondary-features-a", backend)
+    second = backend_job_fingerprint(context, job, "secondary-features-b", backend)
 
     assert first != second
-    assert first == _backend_job_fingerprint(
+    assert first == backend_job_fingerprint(
         context, job, "secondary-features-a", backend
     )
 
@@ -87,13 +87,13 @@ def test_backend_job_fingerprint_uses_actual_checkpoint(tmp_path) -> None:
         "opendde",
         "opendde_v1",
     )
-    original = _backend_job_fingerprint(
+    original = backend_job_fingerprint(
         context, job, "secondary-features", backend
     )
 
     backend.checkpoint_path = str(abag)
 
-    assert original != _backend_job_fingerprint(
+    assert original != backend_job_fingerprint(
         context, job, "secondary-features", backend
     )
 
@@ -142,7 +142,7 @@ def test_matching_secondary_job_manifest_has_no_pending_job(
         lambda *_args: True,
     )
     output_root = tmp_path / "outputs"
-    fingerprint = _backend_job_fingerprint(
+    fingerprint = backend_job_fingerprint(
         context, job, "secondary-features", backend
     )
     write_job_manifest(
@@ -210,7 +210,7 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
         template_mmcif_dir=template_dir,
         source_mmcif_dir=tmp_path / "source-mmcif",
     )
-    original_feature_identity = feature_identity_workflow._prediction_feature_identity(bundle)
+    original_feature_identity = feature_identity_workflow.prediction_feature_identity(bundle)
     model = tmp_path / "model.cif"
     model.write_text("data_model\n")
     prediction = UnifiedPrediction(
@@ -235,7 +235,7 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
     write_job_manifest(
         output_root / job.job_id,
         job=job,
-        fingerprint=_backend_job_fingerprint(
+        fingerprint=backend_job_fingerprint(
             context,
             job,
             original_feature_identity,
@@ -246,7 +246,7 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
     )
 
     non_pairing.write_text(">query\nLMNP\n>changed\nLMNP\n")
-    changed_feature_identity = feature_identity_workflow._prediction_feature_identity(bundle)
+    changed_feature_identity = feature_identity_workflow.prediction_feature_identity(bundle)
     reusable, pending = prediction_workflow._reusable_predictions(
         context,
         [tmp_path / "input.json"],
@@ -308,14 +308,14 @@ def test_standalone_loader_accepts_prediction_stage_fingerprint(
     )
     monkeypatch.setattr(
         resume_workflow,
-        "_primary_prediction_feature_identity",
+        "primary_prediction_feature_identity",
         lambda *_args: "primary-features",
     )
     output_root = tmp_path / "outputs" / "run" / "alphafold3"
     write_job_manifest(
         output_root / job.job_id,
         job=job,
-        fingerprint=_backend_job_fingerprint(
+        fingerprint=backend_job_fingerprint(
             context,
             job,
             "primary-features",
@@ -496,13 +496,13 @@ def test_standalone_cluster_rejects_tampered_candidate_artifact(
     )
     model = tmp_path / "secondary-model.cif"
     model.write_text("data_secondary\n")
-    manifest = workflow_context._existing_or_new_manifest(
+    manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context._expected_feature_fingerprint(
+        workflow_context.expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    resume_workflow._persist_clustering_inputs(
+    resume_workflow.persist_clustering_inputs(
         context,
         [
             {
@@ -628,13 +628,13 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
     )
     model = tmp_path / "effective-secondary.cif"
     model.write_text("data_effective\n")
-    manifest = workflow_context._existing_or_new_manifest(
+    manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context._expected_feature_fingerprint(
+        workflow_context.expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    resume_workflow._persist_clustering_inputs(
+    resume_workflow.persist_clustering_inputs(
         context,
         [
             {
@@ -651,7 +651,7 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
         manifest,
     )
 
-    all_rows, candidate_rows = resume_workflow._validated_clustering_inputs(
+    all_rows, candidate_rows = resume_workflow.validated_clustering_inputs(
         context, manifest
     )
 
@@ -673,13 +673,13 @@ def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mut
     )
     model = tmp_path / "effective.cif"
     model.write_text("data_before\n")
-    manifest = workflow_context._existing_or_new_manifest(
+    manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context._expected_feature_fingerprint(
+        workflow_context.expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    resume_workflow._persist_clustering_inputs(
+    resume_workflow.persist_clustering_inputs(
         context,
         [
             {
@@ -755,16 +755,16 @@ def test_prepared_feature_content_is_bound_to_run_manifest(
         template_mmcif_dir=templates,
         source_mmcif_dir=tmp_path / "source-mmcif",
     )
-    manifest = workflow_context._existing_or_new_manifest(
+    manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context._expected_feature_fingerprint(
+        workflow_context.expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
 
-    first = feature_identity_workflow._bind_feature_content(manifest, bundle)
+    first = feature_identity_workflow.bind_feature_content(manifest, bundle)
     non_pairing.write_text(">query\nLNMP\n")
-    second = feature_identity_workflow._bind_feature_content(manifest, bundle)
+    second = feature_identity_workflow.bind_feature_content(manifest, bundle)
 
     assert first != second
     assert manifest.feature_content_sha256 == second
@@ -782,13 +782,13 @@ def test_standalone_cluster_rejects_wrong_job_membership_without_mutation(
     )
     model = tmp_path / "effective.cif"
     model.write_text("data_effective\n")
-    manifest = workflow_context._existing_or_new_manifest(
+    manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context._expected_feature_fingerprint(
+        workflow_context.expected_feature_fingerprint(
             context.config, context.plan.target_sequence
         ),
     )
-    resume_workflow._persist_clustering_inputs(
+    resume_workflow.persist_clustering_inputs(
         context,
         [
             {

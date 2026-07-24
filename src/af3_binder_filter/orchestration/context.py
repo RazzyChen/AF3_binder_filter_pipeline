@@ -87,10 +87,10 @@ class GpuJobShard:
 
     @property
     def estimated_cost(self) -> int:
-        return sum(_job_estimated_cost(job) for job in self.jobs)
+        return sum(estimate_job_cost(job) for job in self.jobs)
 
 
-def _job_estimated_cost(job: JobSpec) -> int:
+def estimate_job_cost(job: JobSpec) -> int:
     """A stable, model-agnostic proxy for fold inference work."""
 
     total_residues = len(job.target_sequence) + len(job.binder_sequence)
@@ -110,18 +110,18 @@ def plan_gpu_job_shards(
         raise PipelineExecutionError("jobs are pending but no free GPU is available")
     buckets: list[list[JobSpec]] = [[] for _ in selected]
     loads = [0] * len(selected)
-    ordered = sorted(jobs, key=lambda job: (-_job_estimated_cost(job), job.job_id))
+    ordered = sorted(jobs, key=lambda job: (-estimate_job_cost(job), job.job_id))
     for job in ordered:
         index = min(range(len(selected)), key=lambda value: (loads[value], selected[value].index))
         buckets[index].append(job)
-        loads[index] += _job_estimated_cost(job)
+        loads[index] += estimate_job_cost(job)
     return [
         GpuJobShard(gpu, tuple(bucket))
         for gpu, bucket in zip(selected, buckets, strict=True)
     ]
 
 
-def _runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> list[GPUInfo]:
+def runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> list[GPUInfo]:
     """Return free configured GPUs, or deterministic placeholders for dry-run."""
 
     if job_count < 1:
@@ -163,13 +163,13 @@ def _runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> li
     return free[:job_count]
 
 
-def _container_name(context: RunContext, stage_name: str, gpu_index: int) -> str:
+def container_name(context: RunContext, stage_name: str, gpu_index: int) -> str:
     raw = f"aerith-{context.run_id}-{stage_name}-gpu{gpu_index}"
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-.")
     return cleaned[:120]
 
 
-def _record_gpu_assignments(
+def record_gpu_assignments(
     manifest: RunManifest,
     path: Path,
     stage_name: str,
@@ -200,20 +200,20 @@ def _overrides_with_runtime(
     return result
 
 
-def _af3_feature_fingerprint(config: AerithConfig, target_sequence: str) -> str:
+def af3_feature_fingerprint(config: AerithConfig, target_sequence: str) -> str:
     return feature_generation_fingerprint(config, target_sequence)
 
 
-def _expected_feature_fingerprint(
+def expected_feature_fingerprint(
     config: AerithConfig,
     target_sequence: str,
 ) -> str:
     if config.backend.name == "alphafold3" and config.backend.target_data_json:
-        return _af3_feature_fingerprint(config, target_sequence)
+        return af3_feature_fingerprint(config, target_sequence)
     return expected_feature_bundle(config.features, target_sequence).fingerprint
 
 
-def _expected_feature_cache_dir(
+def expected_feature_cache_dir(
     config: AerithConfig,
     target_sequence: str,
     *,
@@ -221,7 +221,7 @@ def _expected_feature_cache_dir(
 ) -> Path:
     if config.backend.name == "alphafold3" and config.backend.target_data_json:
         digest = sequence_sha256(target_sequence)
-        selected = fingerprint or _af3_feature_fingerprint(config, target_sequence)
+        selected = fingerprint or af3_feature_fingerprint(config, target_sequence)
         return (
             Path(config.features.cache_dir).expanduser()
             / digest
@@ -234,7 +234,7 @@ def _expected_feature_cache_dir(
     )
 
 
-def _pipeline_stage_specs(config: AerithConfig) -> tuple[StageSpec, ...]:
+def pipeline_stage_specs(config: AerithConfig) -> tuple[StageSpec, ...]:
     """Compatibility wrapper around the explicit ten-stage registry."""
 
     return progress_stage_specs(config)
@@ -456,14 +456,14 @@ def _context_provenance(
     )
 
 
-def _context_feature_fingerprint(context: RunContext) -> str:
-    return getattr(context, "feature_fingerprint", None) or _expected_feature_fingerprint(
+def context_feature_fingerprint(context: RunContext) -> str:
+    return getattr(context, "feature_fingerprint", None) or expected_feature_fingerprint(
         context.config,
         context.plan.target_sequence,
     )
 
 
-def _existing_or_new_manifest(
+def existing_or_new_manifest(
     context: RunContext,
     feature_fingerprint: str,
 ) -> RunManifest:

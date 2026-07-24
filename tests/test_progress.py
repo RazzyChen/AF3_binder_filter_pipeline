@@ -12,9 +12,9 @@ from af3_binder_filter.progress import (
     RichProgressReporter,
     StageSpec,
 )
-from af3_binder_filter.orchestration.command_runtime import _stable_completion_probe
+from af3_binder_filter.orchestration.command_runtime import stable_completion_probe
 from af3_binder_filter.orchestration.context import (
-    _pipeline_stage_specs,
+    pipeline_stage_specs,
     create_run_context,
 )
 from af3_binder_filter.orchestration.pipeline import run_pipeline
@@ -89,7 +89,7 @@ def test_stage_plan_is_dynamic() -> None:
     config = AerithConfig()
     config.secondary_backend.enabled = False
     config.scoring.esm.enabled = False
-    assert [stage.key for stage in _pipeline_stage_specs(config)] == [
+    assert [stage.key for stage in pipeline_stage_specs(config)] == [
         "features",
         "primary_prediction",
         "primary_interface",
@@ -100,7 +100,7 @@ def test_stage_plan_is_dynamic() -> None:
     config.secondary_backend.enabled = True
     config.secondary_backend.name = "opendde"
     config.scoring.esm.enabled = True
-    assert [stage.key for stage in _pipeline_stage_specs(config)] == [
+    assert [stage.key for stage in pipeline_stage_specs(config)] == [
         "features",
         "primary_prediction",
         "primary_interface",
@@ -124,13 +124,13 @@ def test_stable_completion_probe_rejects_baseline_and_partial_changes(
         stat = artifact.stat()
         return ((str(artifact), stat.st_size, stat.st_mtime_ns),)
 
-    probe = _stable_completion_probe(("job",), signature)
+    probe = stable_completion_probe(("job",), signature)
     assert probe() == 0
     artifact.write_text("partial")
     assert probe() == 0
     assert probe() == 1
 
-    baseline_probe = _stable_completion_probe(("job",), signature)
+    baseline_probe = stable_completion_probe(("job",), signature)
     assert baseline_probe() == 0
     assert baseline_probe() == 0
     artifact.write_text("refreshed output")
@@ -204,7 +204,7 @@ def test_dry_run_reports_every_enabled_stage_and_cache_missing(
 
     assert run_pipeline(context, reporter=reporter) == []
 
-    expected = [stage.key for stage in _pipeline_stage_specs(context.config)]
+    expected = [stage.key for stage in pipeline_stage_specs(context.config)]
     assert reporter.stage_starts == expected
     assert reporter.stage_finishes == [(stage, "dry_run") for stage in expected]
     assert reporter.cache_events == [("features", 0, 1, 1, False)]

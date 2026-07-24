@@ -29,17 +29,17 @@ from af3_binder_filter.esm_tools import (
     write_esm_inputs,
 )
 from af3_binder_filter.orchestration.command_runtime import (
-    _file_signature,
-    _return_code_failure_message,
-    _run_sharded_commands,
-    _stable_completion_probe,
+    file_signature,
+    return_code_failure_message,
+    run_sharded_commands,
+    stable_completion_probe,
 )
 from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
-    _container_name,
-    _record_gpu_assignments,
-    _runtime_gpus,
+    container_name,
+    record_gpu_assignments,
+    runtime_gpus,
     plan_gpu_job_shards,
 )
 
@@ -146,13 +146,13 @@ def esm_stage(
             return [], []
         shards = plan_gpu_job_shards(
             jobs,
-            _runtime_gpus(
+            runtime_gpus(
                 context,
                 job_count=len(jobs),
                 stage_name=tool_name,
             ),
         )
-        _record_gpu_assignments(
+        record_gpu_assignments(
             manifest,
             context.manifest_path,
             tool_name,
@@ -186,7 +186,7 @@ def esm_stage(
                     input_dir=shard_input,
                     output_dir=shard_output,
                     gpu_index=shard.gpu.index,
-                    container_name=_container_name(
+                    container_name=container_name(
                         context,
                         tool_name,
                         shard.gpu.index,
@@ -202,7 +202,7 @@ def esm_stage(
                         / context.run_id
                     ),
                     gpu_index=shard.gpu.index,
-                    container_name=_container_name(
+                    container_name=container_name(
                         context,
                         tool_name,
                         shard.gpu.index,
@@ -223,9 +223,9 @@ def esm_stage(
             esmfold_task,
             total=len(context.plan.jobs),
         )
-        esmfold_probe = _stable_completion_probe(
+        esmfold_probe = stable_completion_probe(
             tuple(job.job_id for job in context.plan.jobs),
-            lambda job_id: _file_signature(
+            lambda job_id: file_signature(
                 tuple(
                     path
                     for shard_output in shard_outputs
@@ -235,7 +235,7 @@ def esm_stage(
                 )
             ),
         )
-        return_codes, errors = _run_sharded_commands(
+        return_codes, errors = run_sharded_commands(
             context,
             "esmfold",
             commands,
@@ -250,7 +250,7 @@ def esm_stage(
         )
         manifest.errors.extend(errors)
         manifest.errors.extend(
-            _return_code_failure_message("esmfold", gpu_index, code)
+            return_code_failure_message("esmfold", gpu_index, code)
             for gpu_index, code in sorted(return_codes.items())
             if code != 0
         )
@@ -299,9 +299,9 @@ def esm_stage(
             total=len(inverse_jobs),
             detail=inverse_detail,
         )
-        esm_if_probe = _stable_completion_probe(
+        esm_if_probe = stable_completion_probe(
             tuple(job.job_id for job in inverse_jobs),
-            lambda job_id: _file_signature(
+            lambda job_id: file_signature(
                 tuple(
                     shard_output
                     / ".aerith_progress"
@@ -311,7 +311,7 @@ def esm_stage(
                 )
             ),
         )
-        return_codes, errors = _run_sharded_commands(
+        return_codes, errors = run_sharded_commands(
             context,
             "esm_if",
             commands,
@@ -327,7 +327,7 @@ def esm_stage(
         )
         manifest.errors.extend(errors)
         manifest.errors.extend(
-            _return_code_failure_message("esm_if", gpu_index, code)
+            return_code_failure_message("esm_if", gpu_index, code)
             for gpu_index, code in sorted(return_codes.items())
             if code != 0
         )
