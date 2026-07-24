@@ -11,16 +11,41 @@ are runtime mounts:
       --build-context esm-src=/home/structure/Software/esm \
       -f docker/runtime/Dockerfile -t aerith/fold-runtime:local .
 
+This direct command is only for development diagnosis. For a static recipe
+check without executing build steps, add `--check` with the same named contexts.
+Release builds must use a verified source bundle.
+
 The Dockerfile downloads and SHA-256 verifies the official
 [MMseqs2 18-8cc5c GPU](https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-gpu.tar.gz)
 and [Foldseek 10-941cd33 GPU](https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-gpu.tar.gz)
 archives. Runtime commands never mount host MMseqs2 or Foldseek executables.
+
+The Dockerfile is multi-stage. The `builder` stage contains CUDA development
+packages and compiles Protenix and OpenDDE fused layer-normalization extensions.
+The final `runtime` stage copies only execution artifacts: it retains AF3's
+`ptxas` helper and Protenix Triton helper, but excludes system `nvcc` and the ESM
+OpenFold compiler payload. `doctor` asserts that both fused extensions are
+already importable, so inference never silently relies on a host CUDA toolkit.
+The default is `LAYERNORM_TYPE=fast_layernorm`.
 
 The pipeline wrapper performs source commit and MMseqs2 SHA-256 validation and
 is preferred for reproducible local builds:
 
     aerith build-runtime-image --config config.yaml --dry-run
     aerith build-runtime-image --config config.yaml
+
+The wrapper rejects dirty Git source trees by default and, for a frozen bundle,
+rechecks its OpenDDE and ESM commits against the configured pins. For a deliberate
+local experiment only, `runtime.allow_dirty_source_trees=true` records the dirty
+state in the bundle manifest. It is not release provenance.
+
+A self-hosted builder can select a candidate tag and persistent local cache:
+
+    uv run python scripts/build_runtime_image.py \
+      --config /ssd/aerith-ci/runtime-build.yaml \
+      --source-bundle /data/aerith/runtime-sources/release-YYYYMMDD \
+      --image aerith/fold-runtime:ci-example \
+      --cache-dir /ssd/aerith-buildkit-cache
 
 Verify the resulting image before inference:
 

@@ -409,6 +409,14 @@ OpenDDE uv environments, Protenix and ESM conda environments, and pinned GPU
 MMseqs2/Foldseek releases. Checkpoints and `/data/AF3_database` are mounted at
 runtime and are not baked into image layers.
 
+The recipe has a `builder` and a final `runtime` stage. CUDA development
+packages and both fused layer-normalization compilations remain in `builder`.
+The final image keeps the four isolated model environments, GPU MMseqs2,
+Foldseek, patched HMMER, and the AF3 `ptxas` helper, but removes system `nvcc`
+and the ESM OpenFold compiler payload. OpenDDE and Protenix fused layer norm are
+precompiled during the build and verified by `fold-runtime doctor`; the default
+runtime setting is `LAYERNORM_TYPE=fast_layernorm`.
+
 ### Local development build
 
 The Dockerfile requires four named source contexts. A direct BuildKit command
@@ -424,6 +432,11 @@ docker build \
   --tag aerith/fold-runtime:local \
   .
 ```
+
+This direct command is useful for development diagnosis only: it bypasses the
+source-bundle provenance gate. Use `docker build --check` with the same named
+contexts for a fast static recipe check, then use the Aerith wrapper for a
+reproducible build.
 
 For normal local builds, use the Aerith wrapper so configured source revisions,
 MMseqs2/Foldseek archives, and build contexts are validated before Docker runs:
@@ -481,6 +494,21 @@ uv run python scripts/build_runtime_image.py \
 The release builder verifies the bundle before constructing BuildKit contexts.
 Release-grade source, recipe, and lock hashes are written into image labels and
 are checked by the export tool.
+
+A source bundle also records each source Git head and dirty status. The build
+command rechecks the OpenDDE and ESM heads against the configured pinned commits
+before passing contexts to Docker. By default a dirty Git source tree is
+rejected. Only for an intentional, locally auditable experiment may you set:
+
+```yaml
+runtime:
+  allow_dirty_source_trees: true
+```
+
+That exception is recorded in the bundle manifest; it does not make an
+uncommitted upstream tree release-grade. The build script accepts `--image` for
+an explicit candidate tag and `--cache-dir /ssd/aerith-buildkit-cache`; it only
+imports a local BuildKit cache after that cache has a valid `index.json`.
 
 ### Export and restore
 
@@ -541,6 +569,54 @@ must not run automatically in ordinary pull-request CI. The recommended
 delivery topology is GitHub Actions for CPU checks and image publication plus a
 dedicated self-hosted runner that gives Aerith exclusive access to the GPU
 host.
+
+## CI/CD and self-hosted runners
+
+`.github/workflows/ci.yml` is the required CPU gate for every push and pull
+request. It creates the locked uv environment, runs Ruff and Deptry, compiles
+all tracked Python, and executes `pytest -m "not integration"` independently on
+Python 3.11 and 3.12. Protect `main` (and, while it is the integration line,
+`Dev`) with the `Quality` and both `Unit tests` checks.
+
+The heavy workflows deliberately use a dedicated lab runner, not GitHub-hosted
+storage and not Kubernetes:
+
+- `docker-build.yml` runs on `self-hosted, linux, x64, aerith-build` when the
+  runtime recipe changes, weekly, or by manual dispatch. It does not request a
+  GPU. It builds a provenance-labelled candidate from a verified source bundle
+  and keeps its BuildKit cache on the local SSD.
+- `gpu-smoke.yml` runs only manually or weekly on
+  `self-hosted, linux, x64, aerith-gpu`; it has no `push` or `pull_request`
+  trigger. A shared GitHub concurrency group plus an OS file lock prevents it
+  from overlapping image builds or another smoke run. It refuses a host with
+  active GPU compute processes, runs `doctor` with `--network none`, then runs
+  AF3+OpenDDE and AF3+Protenix serially.
+
+Configure these repository variables on the self-hosted machine; all point to
+external paths and must never be committed:
+
+```text
+AERITH_RUNTIME_SOURCE_BUNDLE=/data/aerith/runtime-sources/release-YYYYMMDD
+AERITH_RUNTIME_BUILD_CONFIG=/ssd/aerith-ci/runtime-build.yaml
+AERITH_RUNTIME_BUILDKIT_CACHE_DIR=/ssd/aerith-buildkit-cache
+AERITH_RUNTIME_BUILD_LOCK=/ssd/aerith-ci/runtime-build.lock
+AERITH_GPU_SMOKE_CONFIG=/ssd/aerith-ci/golden/config.yaml
+AERITH_GPU_SMOKE_CONTRACT=/ssd/aerith-ci/golden/contract.json
+AERITH_GPU_SMOKE_ROOT=/ssd/aerith-ci/runs
+AERITH_GPU_SMOKE_LOCK=/ssd/aerith-ci/gpu-smoke.lock
+```
+
+The build workflow tags `aerith/fold-runtime:ci-candidate` only in that host's
+Docker store. The GPU runner therefore normally shares the same host/data root;
+if it is a different host, export, checksum, load, and inspect the image first.
+A successful golden smoke additionally tags the immutable image as
+`aerith/fold-runtime:ci-last-known-good` locally.
+
+The golden contract is external JSON with a fixed `job_id`, required result
+columns, exact statuses, and scientifically chosen score ranges per secondary
+backend. `scripts/gpu_smoke.py` writes a per-run summary beside the external
+results and fails on any missing field, out-of-range metric, or nonzero pipeline
+exit. It is intentionally not a replacement for release review.
 
 ## Large external assets
 
