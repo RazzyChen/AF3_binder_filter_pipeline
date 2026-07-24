@@ -9,6 +9,7 @@ from typing import (
     Any,
     Sequence,
 )
+
 from af3_binder_filter.backends import (
     UnifiedPrediction,
     build_backend_command,
@@ -35,11 +36,6 @@ from af3_binder_filter.manifest import (
     validate_legacy_input,
     write_job_manifest,
 )
-from af3_binder_filter.progress import (
-    NullProgressReporter,
-    PipelineProgressReporter,
-)
-from af3_binder_filter.secondary_features import SecondaryFeatureBundle
 from af3_binder_filter.orchestration.command_runtime import (
     file_signature,
     path_belongs_to_job,
@@ -52,13 +48,18 @@ from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
     container_name,
+    plan_gpu_job_shards,
     record_gpu_assignments,
     runtime_gpus,
-    plan_gpu_job_shards,
 )
 from af3_binder_filter.orchestration.feature_identity import (
     prediction_feature_identity,
 )
+from af3_binder_filter.progress import (
+    NullProgressReporter,
+    PipelineProgressReporter,
+)
+from af3_binder_filter.secondary_features import SecondaryFeatureBundle
 
 
 def _input_for_job(input_paths: Sequence[Path], job: JobSpec, backend: str) -> Path:
@@ -101,9 +102,7 @@ def backend_job_fingerprint(
                 "backend": backend.name,
                 "model": backend.model,
                 "runtime_image_id": backend.image_id,
-                "runtime_image_reference": (
-                    None if backend.image_id else backend.image
-                ),
+                "runtime_image_reference": (None if backend.image_id else backend.image),
                 "checkpoint": checkpoint_identity(backend.checkpoint_path),
             },
             sort_keys=True,
@@ -132,13 +131,10 @@ def _reusable_predictions(
         )
         job_manifest = load_manifest(output_root / job.job_id / JOB_MANIFEST_NAME)
         parsed = adapter.parse(job, output_root)
-        structure_valid = (
-            parsed.best_model_path is not None
-            and structure_has_chains(
-                parsed.best_model_path,
-                job.target_chain,
-                job.binder_chain,
-            )
+        structure_valid = parsed.best_model_path is not None and structure_has_chains(
+            parsed.best_model_path,
+            job.target_chain,
+            job.binder_chain,
         )
         matched = job_manifest is not None and job_manifest.get("fingerprint") == fingerprint
         adopted = (
@@ -182,24 +178,19 @@ def _prediction_completion_signature(
         models.extend(root.rglob("*_model.cif" if backend_name == "alphafold3" else "*.cif"))
         if backend_name == "alphafold3":
             confidences.extend(
-                path
-                for path in root.rglob("*_confidences.json")
-                if "summary" not in path.name
+                path for path in root.rglob("*_confidences.json") if "summary" not in path.name
             )
         if summaries and models and (backend_name != "alphafold3" or confidences):
             break
     summaries = [
         path
         for path in set(summaries)
-        if path_belongs_to_job(path, job.job_id)
-        and small_json_is_complete(path)
+        if path_belongs_to_job(path, job.job_id) and small_json_is_complete(path)
     ]
     models = [
         path
         for path in set(models)
-        if path_belongs_to_job(path, job.job_id)
-        and path.is_file()
-        and path.stat().st_size > 0
+        if path_belongs_to_job(path, job.job_id) and path.is_file() and path.stat().st_size > 0
     ]
     if not summaries or not models:
         return ()
@@ -208,9 +199,7 @@ def _prediction_completion_signature(
         confidences = [
             path
             for path in set(confidences)
-            if path_belongs_to_job(path, job.job_id)
-            and path.is_file()
-            and path.stat().st_size > 0
+            if path_belongs_to_job(path, job.job_id) and path.is_file() and path.stat().st_size > 0
         ]
         ranking = job_root / f"{job.job_id}_ranking_scores.csv"
         if not confidences or not ranking.is_file() or ranking.stat().st_size == 0:
@@ -249,12 +238,7 @@ def prediction_stage(
     reporter = reporter or NullProgressReporter()
     backend = backend_settings or context.config.backend
     active_jobs = tuple(jobs or context.plan.jobs)
-    input_dir = (
-        Path(context.config.project.work_dir)
-        / context.run_id
-        / "inputs"
-        / backend.name
-    )
+    input_dir = Path(context.config.project.work_dir) / context.run_id / "inputs" / backend.name
     input_paths = write_backend_inputs(
         active_jobs,
         context.config,
@@ -263,9 +247,7 @@ def prediction_stage(
         backend_settings=backend,
         force=context.config.runtime.force,
     )
-    output_root = (
-        Path(context.config.project.output_dir) / context.run_id / backend.name
-    )
+    output_root = Path(context.config.project.output_dir) / context.run_id / backend.name
     feature_identity = prediction_feature_identity(target_features)
     reusable, pending = _reusable_predictions(
         context,
@@ -300,9 +282,7 @@ def prediction_stage(
             job.job_id: _prediction_artifact_signature(adapter.parse(job, output_root))
             for job in pending
         }
-        pending_key = sequence_sha256(
-            "\n".join(sorted(job.job_id for job in pending))
-        )[:12]
+        pending_key = sequence_sha256("\n".join(sorted(job.job_id for job in pending)))[:12]
         execution_root = input_dir / "pending" / pending_key
         shards = plan_gpu_job_shards(
             pending,
@@ -392,9 +372,8 @@ def prediction_stage(
         prediction = reusable.get(job.job_id) or adapter.parse(job, output_root)
         refreshed = job.job_id in reusable
         if job.job_id not in reusable:
-            refreshed = (
-                _prediction_artifact_signature(prediction)
-                != previous_signatures.get(job.job_id, ())
+            refreshed = _prediction_artifact_signature(prediction) != previous_signatures.get(
+                job.job_id, ()
             )
             if not refreshed:
                 prediction = replace(
@@ -406,12 +385,16 @@ def prediction_stage(
                 )
             else:
                 prediction = replace(prediction, fingerprint_valid=True)
-            if refreshed and prediction.status == "success" and (
-                prediction.best_model_path is None
-                or not structure_has_chains(
-                    prediction.best_model_path,
-                    job.target_chain,
-                    job.binder_chain,
+            if (
+                refreshed
+                and prediction.status == "success"
+                and (
+                    prediction.best_model_path is None
+                    or not structure_has_chains(
+                        prediction.best_model_path,
+                        job.target_chain,
+                        job.binder_chain,
+                    )
                 )
             ):
                 prediction = replace(
@@ -448,9 +431,7 @@ def prediction_stage(
     stage_failed = command_failed or any(
         prediction.status != "success" for prediction in predictions
     )
-    success_count = sum(
-        prediction.status == "success" for prediction in predictions
-    )
+    success_count = sum(prediction.status == "success" for prediction in predictions)
     failure_count = len(predictions) - success_count
     reporter.task_finished(
         stage_name,

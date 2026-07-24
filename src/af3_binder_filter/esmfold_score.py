@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from af3_binder_filter.af3_json import get_chain_sequence, load_af3_input
 from af3_binder_filter.config import ESMFoldConfig
@@ -168,7 +174,9 @@ def _build_shards(
         shard_dir = output_root / "shards" / f"gpu_{gpu.index}"
         fasta_path = shard_dir / "input.fasta"
         pdb_dir = shard_dir / "pdb"
-        command = tuple(build_esmfold_command(fasta_path=fasta_path, pdb_dir=pdb_dir, config=config))
+        command = tuple(
+            build_esmfold_command(fasta_path=fasta_path, pdb_dir=pdb_dir, config=config)
+        )
         _write_shard_fasta(shard_jobs, fasta_path)
         pdb_dir.mkdir(parents=True, exist_ok=True)
         shards.append(
@@ -185,7 +193,6 @@ def _build_shards(
     return shards
 
 
-
 def _progress() -> Progress:
     return Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -198,6 +205,7 @@ def _progress() -> Progress:
 
 def _pdb_count(shards: Sequence[ESMFoldShard]) -> int:
     return sum(1 for shard in shards for _ in shard.pdb_dir.glob("*.pdb"))
+
 
 def _run_shards(shards: Sequence[ESMFoldShard], *, dry_run: bool) -> dict[int, int | None]:
     return_codes: dict[int, int | None] = {}
@@ -261,7 +269,9 @@ def write_esmfold_summary(summary_csv: Path, rows: list[dict[str, Any]]) -> None
         writer.writerows(rows)
 
 
-def _row_for_success(job: ESMFoldJob, *, fasta_path: Path, pdb_path: Path, command: str = "") -> dict[str, Any]:
+def _row_for_success(
+    job: ESMFoldJob, *, fasta_path: Path, pdb_path: Path, command: str = ""
+) -> dict[str, Any]:
     return {
         "job_name": job.job_name,
         "esmfold_status": "success",
@@ -297,7 +307,9 @@ def score_esmfold_inputs(
     with _progress() as progress:
         existing_task = progress.add_task("Checking existing ESMFold outputs", total=len(jobs))
         for job in jobs:
-            existing_pdb = None if force else _find_existing_pdb(output_root, job, chain_id=chain_id)
+            existing_pdb = (
+                None if force else _find_existing_pdb(output_root, job, chain_id=chain_id)
+            )
             if existing_pdb is None:
                 pending.append(job)
             else:
@@ -311,7 +323,9 @@ def score_esmfold_inputs(
             threshold_mib=gpu_busy_threshold_mib,
             allowed_gpu_ids=gpu_ids,
         )
-    shards = _build_shards(jobs=pending, free_gpus=free_gpus, output_root=output_root, config=config)
+    shards = _build_shards(
+        jobs=pending, free_gpus=free_gpus, output_root=output_root, config=config
+    )
     shard_by_job = {job.job_name: shard for shard in shards for job in shard.jobs}
     return_codes = _run_shards(shards, dry_run=dry_run)
 
@@ -323,7 +337,9 @@ def score_esmfold_inputs(
                 rows.append(
                     _row_for_success(
                         job,
-                        fasta_path=output_root / job.job_name / f"{job.job_name}_chain_{chain_id}.fasta",
+                        fasta_path=output_root
+                        / job.job_name
+                        / f"{job.job_name}_chain_{chain_id}.fasta",
                         pdb_path=existing[job.job_name],
                     )
                 )
@@ -340,11 +356,24 @@ def score_esmfold_inputs(
                 "esmfold_command": command_text,
             }
             if dry_run:
-                rows.append({**base_row, "esmfold_status": "skipped", "esmfold_error": "dry-run"})
+                rows.append(
+                    {
+                        **base_row,
+                        "esmfold_status": "skipped",
+                        "esmfold_error": "dry-run",
+                    }
+                )
                 progress.advance(parse_task)
                 continue
             try:
-                rows.append(_row_for_success(job, fasta_path=shard.fasta_path, pdb_path=pdb_path, command=command_text))
+                rows.append(
+                    _row_for_success(
+                        job,
+                        fasta_path=shard.fasta_path,
+                        pdb_path=pdb_path,
+                        command=command_text,
+                    )
+                )
             except Exception as exc:  # noqa: BLE001 - per-job failures should stay resumable
                 return_code = return_codes.get(shard.gpu.index)
                 error = str(exc)

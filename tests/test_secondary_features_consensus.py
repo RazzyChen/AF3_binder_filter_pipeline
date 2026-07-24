@@ -24,17 +24,12 @@ def _protein(
 ) -> Path:
     residue_count = 25
     positions = [
-        position
-        for position in range(1, residue_count + 1)
-        if position != missing_position
+        position for position in range(1, residue_count + 1) if position != missing_position
     ]
     array = struc.AtomArray(len(positions) * 2)
     array.coord = np.asarray(
         [[float(position - 1), 0.0, 0.0] for position in positions]
-        + [
-            [float(position - 1), 4.0 + binder_shift, 0.0]
-            for position in positions
-        ]
+        + [[float(position - 1), 4.0 + binder_shift, 0.0] for position in positions]
     )
     array.chain_id = np.asarray(["A"] * len(positions) + ["B"] * len(positions))
     array.res_id = np.asarray(positions * 2)
@@ -124,9 +119,7 @@ def test_local_feature_adapter_stages_msa_and_reuses_hmmsearch_templates(
     hmmsearch = cache / "hmmsearch.a3m"
     pairing.write_text(">query\nAAAA\n")
     non_pairing.write_text(">query\nAAAA\n>homolog\nAAAA\n")
-    hmmsearch.write_text(
-        ">query\nAAAA\n>1abc_A/1-4 mol:protein length:4\nAAAA\n"
-    )
+    hmmsearch.write_text(">query\nAAAA\n>1abc_A/1-4 mol:protein length:4\nAAAA\n")
     staged_templates = cache / "templates"
     staged_templates.mkdir()
     _protein(staged_templates / "1abc_A_1.cif")
@@ -173,7 +166,9 @@ def test_local_feature_adapter_stages_msa_and_reuses_hmmsearch_templates(
     assert ">1abc_A/1-4" in adapted.hmmsearch_a3m.read_text()
 
 
-def test_consensus_uses_target_frame_and_separates_fold_from_pose(tmp_path: Path) -> None:
+def test_consensus_uses_target_frame_and_separates_fold_from_pose(
+    tmp_path: Path,
+) -> None:
     primary = _protein(tmp_path / "primary.pdb")
     secondary = _protein(tmp_path / "secondary.pdb", binder_shift=2.0)
     contacts = frozenset(range(1, 11))
@@ -250,9 +245,7 @@ def test_multimetric_robust_anomaly_is_review_only() -> None:
     flagged = add_anomaly_flags(rows, ConsensusSettings())[-1]
 
     assert flagged["manual_review"] is True
-    assert flagged["manual_review_reason"] == (
-        "different_pose;robust_multimetric_anomaly"
-    )
+    assert flagged["manual_review_reason"] == ("different_pose;robust_multimetric_anomaly")
     assert flagged["candidate_pool"] is True
 
 

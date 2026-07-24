@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 from pathlib import Path
+
 import pytest
 
 from af3_binder_filter.config import AerithConfig
@@ -10,13 +11,13 @@ from af3_binder_filter.orchestration.factories import (
     ComponentFactoryError,
     create_interface_energy_engine,
 )
+from af3_binder_filter.orchestration.pipeline import run_pipeline
 from af3_binder_filter.orchestration.stage_registry import (
     PIPELINE_STAGE_REGISTRY,
     enabled_stage_definitions,
     progress_stage_specs,
 )
 from af3_binder_filter.rosetta import RosettaCliEngine
-from af3_binder_filter.orchestration.pipeline import run_pipeline
 
 
 def test_stage_registry_has_one_explicit_order_for_all_ten_stages() -> None:
@@ -94,7 +95,5 @@ def test_production_orchestration_does_not_import_private_cross_module_symbols()
                 continue
             private_names = [alias.name for alias in node.names if alias.name.startswith("_")]
             if private_names:
-                violations.append(
-                    f"{source.name}: {', '.join(private_names)}"
-                )
+                violations.append(f"{source.name}: {', '.join(private_names)}")
     assert not violations, "\n".join(violations)

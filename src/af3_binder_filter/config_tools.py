@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -70,7 +70,9 @@ def detect_environment() -> EnvironmentDetection:
         foldseek=shutil.which("foldseek"),
         mmseqs=shutil.which("mmseqs"),
         rosetta_binary=str(rosetta_binary) if rosetta_binary.is_file() else None,
-        rosetta_database=str(rosetta_root / "database") if (rosetta_root / "database").is_dir() else None,
+        rosetta_database=str(rosetta_root / "database")
+        if (rosetta_root / "database").is_dir()
+        else None,
         protenix_source=str(protenix) if protenix.is_dir() else None,
         opendde_source=str(opendde) if opendde.is_dir() else None,
         opendde_commit=_git_head(opendde) if opendde.is_dir() else None,
@@ -258,9 +260,7 @@ def minimal_production_config_payload(
 
     root = project_root.expanduser().resolve()
     input_csv = (
-        csv_path.expanduser().resolve()
-        if csv_path is not None
-        else root / "input" / "screen.csv"
+        csv_path.expanduser().resolve() if csv_path is not None else root / "input" / "screen.csv"
     )
     epitope = epitope_residues.strip() if epitope_residues else None
 
@@ -324,8 +324,20 @@ def doctor_config(
     info: list[str] = []
 
     checks: list[tuple[str, Sequence[str], bool]] = [
-        ("Docker", [config.backend.docker_bin, "info", "--format", "{{.ServerVersion}}"], True),
-        ("GPU", ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader"], True),
+        (
+            "Docker",
+            [config.backend.docker_bin, "info", "--format", "{{.ServerVersion}}"],
+            True,
+        ),
+        (
+            "GPU",
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total",
+                "--format=csv,noheader",
+            ],
+            True,
+        ),
         (
             "backend image",
             [

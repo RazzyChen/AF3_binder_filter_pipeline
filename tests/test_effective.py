@@ -39,16 +39,12 @@ def test_complete_quality_tie_prefers_secondary():
 
     assert selected["effective_backend"] == "opendde"
     assert selected["effective_best_model_path"] == "/tmp/secondary.cif"
-    assert selected["effective_normalized_binder_pdb_path"] == (
-        "/tmp/secondary-binder.pdb"
-    )
+    assert selected["effective_normalized_binder_pdb_path"] == ("/tmp/secondary-binder.pdb")
     assert selected["effective_selection_reason"] == "quality:secondary_tie_break"
 
 
 def test_secondary_rescue_beats_primary_failure():
-    selected = apply_effective_backend(
-        _row(primary_final_pass=False, secondary_final_pass=True)
-    )
+    selected = apply_effective_backend(_row(primary_final_pass=False, secondary_final_pass=True))
 
     assert selected["effective_backend"] == "opendde"
     assert selected["effective_pass"] is True

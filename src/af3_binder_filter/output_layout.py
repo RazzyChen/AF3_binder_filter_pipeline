@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-
 OUTPUT_SCHEMA_VERSION = 3
 
 STAGE_DIRECTORIES: dict[str, str] = {

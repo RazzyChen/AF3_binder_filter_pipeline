@@ -9,17 +9,8 @@ from typing import (
     Any,
     Sequence,
 )
+
 from af3_binder_filter.backends import UnifiedPrediction
-from af3_binder_filter.io_utils import atomic_write_csv
-from af3_binder_filter.jobs import (
-    JobSpec,
-    sequence_sha256,
-)
-from af3_binder_filter.manifest import RunManifest
-from af3_binder_filter.progress import (
-    NullProgressReporter,
-    PipelineProgressReporter,
-)
 from af3_binder_filter.esm_tools import (
     add_esmfold_backend_comparison,
     build_esm_if_container_command,
@@ -28,6 +19,12 @@ from af3_binder_filter.esm_tools import (
     load_cached_esm_rows,
     write_esm_inputs,
 )
+from af3_binder_filter.io_utils import atomic_write_csv
+from af3_binder_filter.jobs import (
+    JobSpec,
+    sequence_sha256,
+)
+from af3_binder_filter.manifest import RunManifest
 from af3_binder_filter.orchestration.command_runtime import (
     file_signature,
     return_code_failure_message,
@@ -38,9 +35,13 @@ from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
     container_name,
+    plan_gpu_job_shards,
     record_gpu_assignments,
     runtime_gpus,
-    plan_gpu_job_shards,
+)
+from af3_binder_filter.progress import (
+    NullProgressReporter,
+    PipelineProgressReporter,
 )
 
 
@@ -58,7 +59,10 @@ def esm_stage(
 
     reporter = reporter or NullProgressReporter()
     if not context.config.scoring.esm.enabled:
-        return ([{"job_name": job.job_id, "esm_status": "disabled"} for job in context.plan.jobs], False)
+        return (
+            [{"job_name": job.job_id, "esm_status": "disabled"} for job in context.plan.jobs],
+            False,
+        )
     input_dir = Path(context.config.project.work_dir) / context.run_id / "esm_inputs"
     stage_layout = context.layout.stage("esm")
     output_dir = stage_layout.artifacts / "esm"
@@ -102,9 +106,7 @@ def esm_stage(
                 detail="cache hit",
             )
         if context.config.scoring.esm.inverse_folding:
-            prediction_by_job = {
-                prediction.job_id: prediction for prediction in predictions
-            }
+            prediction_by_job = {prediction.job_id: prediction for prediction in predictions}
             eligible = sum(
                 prediction_by_job[job.job_id].status == "success"
                 and prediction_by_job[job.job_id].best_model_path is not None
@@ -161,18 +163,8 @@ def esm_stage(
         commands: list[tuple[GpuJobShard, Sequence[str]]] = []
         shard_outputs: list[Path] = []
         for shard in shards:
-            shard_input = (
-                input_dir
-                / "shards"
-                / tool_name
-                / f"gpu_{shard.gpu.index}"
-            )
-            shard_output = (
-                output_dir
-                / "shards"
-                / tool_name
-                / f"gpu_{shard.gpu.index}"
-            )
+            shard_input = input_dir / "shards" / tool_name / f"gpu_{shard.gpu.index}"
+            shard_output = output_dir / "shards" / tool_name / f"gpu_{shard.gpu.index}"
             shard_output.mkdir(parents=True, exist_ok=True)
             write_esm_inputs(
                 shard.jobs,
@@ -198,8 +190,7 @@ def esm_stage(
                     input_dir=shard_input,
                     output_dir=shard_output,
                     prediction_output_dir=(
-                        Path(context.config.project.output_dir)
-                        / context.run_id
+                        Path(context.config.project.output_dir) / context.run_id
                     ),
                     gpu_index=shard.gpu.index,
                     container_name=container_name(
@@ -229,9 +220,7 @@ def esm_stage(
                 tuple(
                     path
                     for shard_output in shard_outputs
-                    for path in (shard_output / "esmfold").glob(
-                        f"{job_id}*.pdb"
-                    )
+                    for path in (shard_output / "esmfold").glob(f"{job_id}*.pdb")
                 )
             ),
         )
@@ -266,9 +255,7 @@ def esm_stage(
             output_dir,
             structure_rows=structure_rows,
         )
-        fold_success = sum(
-            row.get("esmfold_status") == "success" for row in fold_rows
-        )
+        fold_success = sum(row.get("esmfold_status") == "success" for row in fold_rows)
         reporter.task_finished(
             "esm",
             esmfold_task,
@@ -290,9 +277,7 @@ def esm_stage(
             inverse_jobs,
         )
         esm_if_task = "ESM-IF"
-        inverse_detail = (
-            f"{len(inverse_jobs)} eligible / {len(context.plan.jobs)} total"
-        )
+        inverse_detail = f"{len(inverse_jobs)} eligible / {len(context.plan.jobs)} total"
         reporter.task_started(
             "esm",
             esm_if_task,
@@ -303,10 +288,7 @@ def esm_stage(
             tuple(job.job_id for job in inverse_jobs),
             lambda job_id: file_signature(
                 tuple(
-                    shard_output
-                    / ".aerith_progress"
-                    / "esm_if"
-                    / f"{sequence_sha256(job_id)}.json"
+                    shard_output / ".aerith_progress" / "esm_if" / f"{sequence_sha256(job_id)}.json"
                     for shard_output in shard_outputs
                 )
             ),
@@ -351,9 +333,7 @@ def esm_stage(
                 "esm_if_perplexity",
             ),
         )
-        inverse_by_job = {
-            str(row.get("job_name")): row for row in inverse_rows
-        }
+        inverse_by_job = {str(row.get("job_name")): row for row in inverse_rows}
         inverse_success = sum(
             inverse_by_job.get(job.job_id, {}).get("esm_if_status") == "success"
             for job in inverse_jobs
@@ -399,9 +379,7 @@ def esm_stage(
     }
     if context.config.scoring.esm.inverse_folding:
         failed |= any(
-            row.get("esm_if_status") != "success"
-            for row in rows
-            if row["job_name"] in expected_if
+            row.get("esm_if_status") != "success" for row in rows if row["job_name"] in expected_if
         )
     atomic_write_csv(stage_layout.tables / "esm_scores.csv", rows)
     return rows, failed

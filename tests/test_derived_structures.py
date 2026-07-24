@@ -123,9 +123,7 @@ def _derive(
         ),
         distance=distance,
         sasa_point_number=20,
-        rosetta_input_dir=(
-            tmp_path / f"{backend}_stage" / "artifacts" / "rosetta_inputs"
-        ),
+        rosetta_input_dir=(tmp_path / f"{backend}_stage" / "artifacts" / "rosetta_inputs"),
     )
     assert row["interface_status"] == "success"
     return model, row
@@ -318,18 +316,14 @@ def test_derivative_identity_covers_mapping_sequences_contacts_and_cutoff(
     _model, changed_cutoff = _derive(tmp_path, distance=3.0)
 
     assert first["derived_structure_id"] != changed_cutoff["derived_structure_id"]
-    first_payload = json.loads(
-        Path(str(first["derived_structure_manifest_path"])).read_text()
-    )
+    first_payload = json.loads(Path(str(first["derived_structure_manifest_path"])).read_text())
     changed_payload = json.loads(
         Path(str(changed_cutoff["derived_structure_manifest_path"])).read_text()
     )
     identity = first_payload["identity"]
     assert identity["target_sequence_sha256"]
     assert identity["binder_sequence_sha256"]
-    assert identity["residue_mapping"][0]["mapping_mode"] == (
-        "complete_sequence_order"
-    )
+    assert identity["residue_mapping"][0]["mapping_mode"] == ("complete_sequence_order")
     assert identity["target_interface_positions"] == [1]
     assert changed_payload["identity"]["target_interface_positions"] == []
     assert changed_payload["identity"]["interface_distance_cutoff"] == 3.0
@@ -556,9 +550,9 @@ def test_same_content_writers_publish_one_complete_bundle(tmp_path: Path) -> Non
     assert {row["derived_structure_status"] for row in rows} == {"success"}
     assert len({row["derived_structure_id"] for row in rows}) == 1
     assert sorted(row["derived_structure_cache_hit"] for row in rows) == [False, True]
-    assert validate_derived_manifest(
-        Path(str(rows[0]["derived_structure_manifest_path"]))
-    ) is not None
+    assert (
+        validate_derived_manifest(Path(str(rows[0]["derived_structure_manifest_path"]))) is not None
+    )
 
 
 def test_source_mutation_during_parse_is_rejected(
@@ -624,12 +618,8 @@ def test_source_mutation_during_bundle_build_preserves_geometry(
     assert row["interface_contact_pair_count"] == 1
     assert row["derived_structure_status"] == "error"
     assert row["source_model_provenance_status"] == "changed"
-    assert row["source_model_sha256_preparse"] != row[
-        "source_model_sha256_observed"
-    ]
-    assert "source model changed while building derivatives" in str(
-        row["derived_structure_error"]
-    )
+    assert row["source_model_sha256_preparse"] != row["source_model_sha256_observed"]
+    assert "source model changed while building derivatives" in str(row["derived_structure_error"])
     selection_input = {
         "job_name": "job",
         "target_chain": "A",
@@ -686,12 +676,8 @@ def test_esm_cache_is_bound_to_validated_effective_structure(
         "esmfold_status": "missing",
         "esm_if_status": "not_available",
         "esm_effective_backend": "alphafold3",
-        "esm_effective_derived_structure_id": interface_row[
-            "derived_structure_id"
-        ],
-        "esm_effective_source_model_sha256": interface_row[
-            "derived_source_model_sha256"
-        ],
+        "esm_effective_derived_structure_id": interface_row["derived_structure_id"],
+        "esm_effective_source_model_sha256": interface_row["derived_source_model_sha256"],
     }
     cache = tmp_path / "esm_rows.csv"
 
@@ -702,14 +688,17 @@ def test_esm_cache_is_bound_to_validated_effective_structure(
             writer.writerow(value)
 
     write_cache(row)
-    assert load_cached_esm_rows(
-        cache,
-        (job,),
-        (prediction,),
-        require_esmfold=False,
-        require_inverse_folding=False,
-        structure_rows=(effective,),
-    ) is not None
+    assert (
+        load_cached_esm_rows(
+            cache,
+            (job,),
+            (prediction,),
+            require_esmfold=False,
+            require_inverse_folding=False,
+            structure_rows=(effective,),
+        )
+        is not None
+    )
 
     for field in (
         "esm_effective_backend",
@@ -719,14 +708,17 @@ def test_esm_cache_is_bound_to_validated_effective_structure(
         tampered = dict(row)
         tampered[field] = "wrong"
         write_cache(tampered)
-        assert load_cached_esm_rows(
-            cache,
-            (job,),
-            (prediction,),
-            require_esmfold=False,
-            require_inverse_folding=False,
-            structure_rows=(effective,),
-        ) is None
+        assert (
+            load_cached_esm_rows(
+                cache,
+                (job,),
+                (prediction,),
+                require_esmfold=False,
+                require_inverse_folding=False,
+                structure_rows=(effective,),
+            )
+            is None
+        )
 
 
 def test_chain_ca_errors_when_requested_chain_is_absent(tmp_path: Path) -> None:
@@ -791,9 +783,7 @@ def test_secondary_structure_change_invalidates_cached_comparison(
     esmfold = output / "esmfold"
     esmfold.mkdir(parents=True)
     esmfold_model = esmfold / "job_chain_B.pdb"
-    esmfold_model.write_bytes(
-        Path(str(interface_row["normalized_binder_pdb_path"])).read_bytes()
-    )
+    esmfold_model.write_bytes(Path(str(interface_row["normalized_binder_pdb_path"])).read_bytes())
     rows = collect_esm_rows(
         (job,),
         (effective_prediction,),
@@ -820,30 +810,36 @@ def test_secondary_structure_change_invalidates_cached_comparison(
         writer.writeheader()
         writer.writerows(rows)
 
-    assert load_cached_esm_rows(
-        cache,
-        (job,),
-        (effective_prediction,),
-        require_esmfold=False,
-        require_inverse_folding=False,
-        structure_rows=(effective_row,),
-        primary_predictions=(effective_prediction,),
-        secondary_predictions=(secondary_prediction,),
-    ) is not None
+    assert (
+        load_cached_esm_rows(
+            cache,
+            (job,),
+            (effective_prediction,),
+            require_esmfold=False,
+            require_inverse_folding=False,
+            structure_rows=(effective_row,),
+            primary_predictions=(effective_prediction,),
+            secondary_predictions=(secondary_prediction,),
+        )
+        is not None
+    )
 
     secondary_model.write_text(
         secondary_model.read_text() + "REMARK non-effective backend changed\n"
     )
-    assert load_cached_esm_rows(
-        cache,
-        (job,),
-        (effective_prediction,),
-        require_esmfold=False,
-        require_inverse_folding=False,
-        structure_rows=(effective_row,),
-        primary_predictions=(effective_prediction,),
-        secondary_predictions=(secondary_prediction,),
-    ) is None
+    assert (
+        load_cached_esm_rows(
+            cache,
+            (job,),
+            (effective_prediction,),
+            require_esmfold=False,
+            require_inverse_folding=False,
+            structure_rows=(effective_row,),
+            primary_predictions=(effective_prediction,),
+            secondary_predictions=(secondary_prediction,),
+        )
+        is None
+    )
 
 
 def test_consensus_uses_validated_coordinate_npz_and_falls_back_safely(
@@ -1002,9 +998,7 @@ def test_consensus_rows_consumes_validated_derivatives_without_raw_reparse(
         ),
     )
 
-    assert result[0]["consensus_status"] == "success", result[0].get(
-        "consensus_error"
-    )
+    assert result[0]["consensus_status"] == "success", result[0].get("consensus_error")
     assert result[0]["consensus_coordinate_source"] == "derived_cache"
     assert result[0]["primary_derived_structure_status"] == "success"
     assert result[0]["secondary_derived_structure_status"] == "success"

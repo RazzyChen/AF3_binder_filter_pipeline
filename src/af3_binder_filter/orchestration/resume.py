@@ -10,6 +10,7 @@ from typing import (
     Any,
     Sequence,
 )
+
 from af3_binder_filter.backends import (
     UnifiedPrediction,
     output_adapter,
@@ -30,8 +31,6 @@ from af3_binder_filter.manifest import (
     load_manifest,
     write_job_manifest,
 )
-from af3_binder_filter.output_layout import STAGE_DIRECTORIES
-from af3_binder_filter.reporting import write_public_reports
 from af3_binder_filter.orchestration.clustering_stage import clustering_stage
 from af3_binder_filter.orchestration.context import (
     ClusteringOutcome,
@@ -44,8 +43,8 @@ from af3_binder_filter.orchestration.feature_identity import (
     primary_prediction_feature_identity,
 )
 from af3_binder_filter.orchestration.interface_stage import (
-    interface_stage_failed,
     interface_stage,
+    interface_stage_failed,
 )
 from af3_binder_filter.orchestration.prediction_stage import (
     backend_job_fingerprint,
@@ -56,6 +55,8 @@ from af3_binder_filter.orchestration.selection import (
     effective_predictions_from_rows,
     final_sort_key,
 )
+from af3_binder_filter.output_layout import STAGE_DIRECTORIES
+from af3_binder_filter.reporting import write_public_reports
 
 
 def load_predictions_for_context(
@@ -63,9 +64,7 @@ def load_predictions_for_context(
 ) -> tuple[list[UnifiedPrediction], list[dict[str, Any]]]:
     adapter = output_adapter(context.config.backend.name)
     output_root = (
-        Path(context.config.project.output_dir)
-        / context.run_id
-        / context.config.backend.name
+        Path(context.config.project.output_dir) / context.run_id / context.config.backend.name
     )
     feature_fingerprint = primary_prediction_feature_identity(context)
     input_dir = (
@@ -90,10 +89,7 @@ def load_predictions_for_context(
             context.config.backend,
         )
         job_manifest = load_manifest(output_root / job.job_id / JOB_MANIFEST_NAME)
-        matched = (
-            job_manifest is not None
-            and job_manifest.get("fingerprint") == fingerprint
-        )
+        matched = job_manifest is not None and job_manifest.get("fingerprint") == fingerprint
         adopted = False
         if job_manifest is None and context.config.project.adopt_legacy:
             input_path = (
@@ -103,13 +99,10 @@ def load_predictions_for_context(
             )
             if input_path.is_file():
                 adopted = legacy_output_valid(job, input_path, parsed)
-        structure_valid = (
-            parsed.best_model_path is not None
-            and structure_has_chains(
-                parsed.best_model_path,
-                job.target_chain,
-                job.binder_chain,
-            )
+        structure_valid = parsed.best_model_path is not None and structure_has_chains(
+            parsed.best_model_path,
+            job.target_chain,
+            job.binder_chain,
         )
         if not structure_valid:
             parsed = replace(
@@ -135,9 +128,7 @@ def load_predictions_for_context(
                     "best_model_path": str(parsed.best_model_path)
                     if parsed.best_model_path
                     else None,
-                    "summary_path": str(parsed.summary_path)
-                    if parsed.summary_path
-                    else None,
+                    "summary_path": str(parsed.summary_path) if parsed.summary_path else None,
                     "confidence_path": str(parsed.confidence_path)
                     if parsed.confidence_path
                     else None,
@@ -159,18 +150,14 @@ def run_interface_only(context: RunContext) -> list[dict[str, Any]]:
             context.layout.stage("primary_prediction").tables / "predictions.csv",
             base_rows,
         )
-        rows = interface_stage(
-            context, predictions, base_rows, label="primary", write_outputs=True
-        )
+        rows = interface_stage(context, predictions, base_rows, label="primary", write_outputs=True)
         for row in rows:
             row["candidate_pool"] = bool(row.get("final_pass"))
         write_public_reports(context.layout, rows, clustering_status="not_run")
         manifest.artifact_sha256["public_all_results"] = (
             file_sha256(context.layout.all_results) or ""
         )
-        manifest.artifact_sha256["public_candidates"] = (
-            file_sha256(context.layout.candidates) or ""
-        )
+        manifest.artifact_sha256["public_candidates"] = file_sha256(context.layout.candidates) or ""
         manifest.artifact_sha256["backend_review"] = (
             file_sha256(context.layout.backend_review) or ""
         )
@@ -207,12 +194,7 @@ def _read_interface_rows(path: Path) -> list[dict[str, Any]]:
 def _clustering_input_paths(context: RunContext) -> tuple[Path, Path]:
     # Construct paths without ``RunOutputLayout.stage()``, whose ensure call
     # would create directories before standalone artifact validation.
-    tables = (
-        context.results_dir
-        / "stages"
-        / STAGE_DIRECTORIES["clustering"]
-        / "tables"
-    )
+    tables = context.results_dir / "stages" / STAGE_DIRECTORIES["clustering"] / "tables"
     return tables / "clustering_input.csv", tables / "clustering_candidates.csv"
 
 
@@ -250,9 +232,7 @@ def persist_clustering_inputs(
         json.dumps(fieldnames, separators=(",", ":"), ensure_ascii=True)
     )
     manifest.artifact_sha256["clustering_input"] = file_sha256(all_path) or ""
-    manifest.artifact_sha256["clustering_candidates"] = (
-        file_sha256(candidate_path) or ""
-    )
+    manifest.artifact_sha256["clustering_candidates"] = file_sha256(candidate_path) or ""
     manifest.effective_model_sha256 = model_identities
     manifest.write(context.manifest_path)
 
@@ -277,9 +257,7 @@ def validated_clustering_inputs(
         expected = manifest.artifact_sha256.get(key)
         actual = file_sha256(path)
         if not expected or actual != expected:
-            raise PipelineExecutionError(
-                f"{key} does not match the run manifest: {path}"
-            )
+            raise PipelineExecutionError(f"{key} does not match the run manifest: {path}")
     all_rows = _read_interface_rows(all_path)
     candidate_rows = _read_interface_rows(candidate_path)
     if not all_rows:
@@ -290,9 +268,7 @@ def validated_clustering_inputs(
         all_header = next(csv.reader(handle), [])
     with candidate_path.open(encoding="utf-8", newline="") as handle:
         candidate_header = next(csv.reader(handle), [])
-    schema_sha = sequence_sha256(
-        json.dumps(all_header, separators=(",", ":"), ensure_ascii=True)
-    )
+    schema_sha = sequence_sha256(json.dumps(all_header, separators=(",", ":"), ensure_ascii=True))
     if (
         all_header != candidate_header
         or manifest.artifact_sha256.get("clustering_input_schema") != schema_sha
@@ -309,10 +285,7 @@ def validated_clustering_inputs(
     }
     if context.config.scoring.esm.enabled and context.config.scoring.esm.esmfold:
         required_columns.add("esmfold_status")
-    if (
-        context.config.scoring.esm.enabled
-        and context.config.scoring.esm.inverse_folding
-    ):
+    if context.config.scoring.esm.enabled and context.config.scoring.esm.inverse_folding:
         required_columns.add("esm_if_status")
     if not required_columns.issubset(all_columns) or candidate_columns != all_columns:
         raise PipelineExecutionError(
@@ -335,9 +308,7 @@ def validated_clustering_inputs(
     candidates_by_job = indexed(candidate_rows, "clustering_candidates.csv")
     planned_ids = {job.job_id for job in context.plan.jobs}
     selected_ids = {
-        job_id
-        for job_id, row in all_by_job.items()
-        if _row_truthy(row.get("candidate_pool"))
+        job_id for job_id, row in all_by_job.items() if _row_truthy(row.get("candidate_pool"))
     }
     if set(all_by_job) != planned_ids:
         raise PipelineExecutionError(
@@ -353,23 +324,17 @@ def validated_clustering_inputs(
         if row.get("effective_best_model_path") not in (None, "")
     }
     if set(manifest.effective_model_sha256) != expected_bound_ids:
-        raise PipelineExecutionError(
-            "effective model bindings do not match clustering_input.csv"
-        )
+        raise PipelineExecutionError("effective model bindings do not match clustering_input.csv")
     for job_id in expected_bound_ids:
         row = all_by_job[job_id]
-        actual_model_sha = file_sha256(
-            Path(str(row["effective_best_model_path"]))
-        )
+        actual_model_sha = file_sha256(Path(str(row["effective_best_model_path"])))
         if actual_model_sha != manifest.effective_model_sha256[job_id]:
             raise PipelineExecutionError(
                 f"effective model does not match the run manifest for {job_id}"
             )
         derived_sha = row.get("effective_derived_source_model_sha256")
         if derived_sha not in (None, "") and str(derived_sha) != actual_model_sha:
-            raise PipelineExecutionError(
-                f"derived/model identity mismatch for {job_id}"
-            )
+            raise PipelineExecutionError(f"derived/model identity mismatch for {job_id}")
     for job_id, candidate in candidates_by_job.items():
         if candidate != all_by_job[job_id]:
             raise PipelineExecutionError(
@@ -404,9 +369,7 @@ def run_clustering_only(context: RunContext) -> bool:
         manifest.write(context.manifest_path)
         selected_ids = {str(row["job_name"]) for row in selected_rows}
         jobs = tuple(job for job in context.plan.jobs if job.job_id in selected_ids)
-        selected_predictions = tuple(
-            effective_predictions_from_rows(jobs, selected_rows)
-        )
+        selected_predictions = tuple(effective_predictions_from_rows(jobs, selected_rows))
         outcome = (
             clustering_stage(
                 context,
@@ -424,17 +387,13 @@ def run_clustering_only(context: RunContext) -> bool:
             all_rows,
             member_rows=outcome.member_rows,
             representative_rows=outcome.representative_rows,
-            final_job_ids=tuple(
-                str(row.get("job_name")) for row in outcome.final_rows
-            ),
+            final_job_ids=tuple(str(row.get("job_name")) for row in outcome.final_rows),
             clustering_status="partial" if failed else "success",
         )
         manifest.artifact_sha256["public_all_results"] = (
             file_sha256(context.layout.all_results) or ""
         )
-        manifest.artifact_sha256["public_candidates"] = (
-            file_sha256(context.layout.candidates) or ""
-        )
+        manifest.artifact_sha256["public_candidates"] = file_sha256(context.layout.candidates) or ""
         manifest.artifact_sha256["public_final_shortlist"] = (
             file_sha256(context.layout.final_shortlist) or ""
         )

@@ -9,6 +9,7 @@ from typing import (
     Any,
     Sequence,
 )
+
 from af3_binder_filter.backends import UnifiedPrediction
 from af3_binder_filter.clustering import (
     build_foldseek_container_command,
@@ -45,13 +46,9 @@ def clustering_stage(
         for prediction in predictions
         if prediction.status == "success" and prediction.best_model_path is not None
     }
-    clustering_root = (
-        Path(context.config.project.work_dir) / context.run_id / "clustering"
-    )
+    clustering_root = Path(context.config.project.work_dir) / context.run_id / "clustering"
     clustering_root.mkdir(parents=True, exist_ok=True)
-    work_dir = Path(
-        tempfile.mkdtemp(prefix="execution-", dir=clustering_root)
-    )
+    work_dir = Path(tempfile.mkdtemp(prefix="execution-", dir=clustering_root))
     binder_dir, complex_dir = prepare_foldseek_inputs(
         active_jobs,
         model_paths,
@@ -61,9 +58,7 @@ def clustering_stage(
     stage_layout = context.layout.stage("clustering")
     foldseek_root = stage_layout.artifacts / "foldseek"
     foldseek_root.mkdir(parents=True, exist_ok=True)
-    foldseek_result_dir = Path(
-        tempfile.mkdtemp(prefix="execution-", dir=foldseek_root)
-    )
+    foldseek_result_dir = Path(tempfile.mkdtemp(prefix="execution-", dir=foldseek_root))
     binder_prefix = foldseek_result_dir / "binder"
     complex_prefix = foldseek_result_dir / "complex"
     binder_cluster_tsv = Path(str(binder_prefix) + "_cluster.tsv")
@@ -107,9 +102,7 @@ def clustering_stage(
         container_name=container_name(context, "foldseek-complex", complex_gpu.index),
     )
 
-    def execute_foldseek(
-        layer: str, command: Sequence[str], cluster_tsv: Path
-    ):
+    def execute_foldseek(layer: str, command: Sequence[str], cluster_tsv: Path):
         return run_foldseek_command(
             layer,
             command,
@@ -158,8 +151,7 @@ def clustering_stage(
         prefix="complex",
     )
     contacts = {
-        str(row["job_name"]): row.get("effective_target_interface_residues", "")
-        for row in rows
+        str(row["job_name"]): row.get("effective_target_interface_residues", "") for row in rows
     }
     epitope_membership, epitope_raw = greedy_epitope_clusters(
         contacts,
@@ -167,17 +159,13 @@ def clustering_stage(
     )
     missing_ids: set[str] = set()
     if not context.config.runtime.dry_run:
-        missing_ids = set(all_job_ids) - (
-            set(binder_membership) & set(complex_membership)
-        )
+        missing_ids = set(all_job_ids) - (set(binder_membership) & set(complex_membership))
     cluster_rows: list[dict[str, Any]] = []
     for source in rows:
         row = dict(source)
         if str(row.get("job_name")) in missing_ids:
             reasons = {
-                reason
-                for reason in str(row.get("manual_review_reason", "")).split(";")
-                if reason
+                reason for reason in str(row.get("manual_review_reason", "")).split(";") if reason
             }
             reasons.add("clustering_input_or_output_missing")
             row["manual_review"] = True
@@ -197,11 +185,7 @@ def clustering_stage(
         epitope_raw_representatives=epitope_raw,
     )
     return ClusteringOutcome(
-        failed=(
-            binder_run.status == "error"
-            or complex_run.status == "error"
-            or bool(missing_ids)
-        ),
+        failed=(binder_run.status == "error" or complex_run.status == "error" or bool(missing_ids)),
         member_rows=tuple(member_rows),
         representative_rows=tuple(representative_rows),
         final_rows=tuple(final_rows),

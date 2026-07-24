@@ -22,7 +22,6 @@ from typing import Callable, Literal, Mapping, Protocol, Sequence, TextIO
 
 from af3_binder_filter.io_utils import atomic_write_text
 
-
 EventKind = Literal[
     "stage_started",
     "command_started",
@@ -154,11 +153,7 @@ class CommandOutcome:
     def succeeded(self) -> bool:
         """Only a real or simulated zero exit is successful."""
 
-        return (
-            self.returncode == 0
-            and not self.timed_out
-            and self.error is None
-        )
+        return self.returncode == 0 and not self.timed_out and self.error is None
 
     @property
     def failed(self) -> bool:
@@ -503,9 +498,10 @@ class LocalCommandExecutor:
             return outcome
 
         process: subprocess.Popen[str] | None = None
-        with command.stdout_path.open("w", encoding="utf-8") as stdout, command.stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr:
+        with (
+            command.stdout_path.open("w", encoding="utf-8") as stdout,
+            command.stderr_path.open("w", encoding="utf-8") as stderr,
+        ):
             popen_kwargs: dict[str, object] = {
                 "shell": False,
                 "stdout": stdout,

@@ -8,8 +8,7 @@ import json
 from pathlib import Path
 
 from alphafold3.constants import mmcif_names
-from alphafold3.data import msa_config
-from alphafold3.data import structure_stores
+from alphafold3.data import msa_config, structure_stores
 from alphafold3.data import templates as templates_lib
 
 

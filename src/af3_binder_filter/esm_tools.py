@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import math
 import os
 import shutil
@@ -169,9 +168,7 @@ def _blocked_structure_job_ids(
     for row in rows:
         job_id = row_job_identifier(row)
         status_key = f"{prefix}_interface_status" if prefix else "interface_status"
-        has_declared_status = status_key in row or (
-            bool(prefix) and "interface_status" in row
-        )
+        has_declared_status = status_key in row or (bool(prefix) and "interface_status" in row)
         if (
             job_id is not None
             and has_declared_status
@@ -240,21 +237,23 @@ def _container_base(
     ]
     if container_name:
         command.extend(["--name", container_name])
-    command.extend([
-        "--network",
-        "none",
-        "--gpus",
-        f"device={gpu_index}",
-        "--shm-size",
-        "4g",
-        "--volume",
-        f"{inputs.resolve()}:/inputs:ro",
-        "--volume",
-        f"{outputs.resolve()}:/outputs",
-        "--volume",
-        f"{cache}:/root/.cache/torch/hub/checkpoints:ro",
-        config.backend.image,
-    ])
+    command.extend(
+        [
+            "--network",
+            "none",
+            "--gpus",
+            f"device={gpu_index}",
+            "--shm-size",
+            "4g",
+            "--volume",
+            f"{inputs.resolve()}:/inputs:ro",
+            "--volume",
+            f"{outputs.resolve()}:/outputs",
+            "--volume",
+            f"{cache}:/root/.cache/torch/hub/checkpoints:ro",
+            config.backend.image,
+        ]
+    )
     return command
 
 
@@ -359,11 +358,14 @@ def load_cached_esm_rows(
         structure_rows,
         prefix=structure_prefix,
     )
-    comparison_bindings: dict[str, tuple[
-        dict[str, UnifiedPrediction],
-        dict[str, _ESMStructureBinding],
-        set[str],
-    ]] = {}
+    comparison_bindings: dict[
+        str,
+        tuple[
+            dict[str, UnifiedPrediction],
+            dict[str, _ESMStructureBinding],
+            set[str],
+        ],
+    ] = {}
     for label, comparison_predictions in (
         ("primary", primary_predictions),
         ("secondary", secondary_predictions),
@@ -375,10 +377,7 @@ def load_cached_esm_rows(
             prefix=label,
         )
         comparison_bindings[label] = (
-            {
-                prediction.job_id: prediction
-                for prediction in comparison_predictions
-            },
+            {prediction.job_id: prediction for prediction in comparison_predictions},
             derived_bindings,
             _blocked_structure_job_ids(structure_rows, prefix=label),
         )
@@ -399,16 +398,8 @@ def load_cached_esm_rows(
             and prediction.best_model_path is not None
             and job.job_id not in blocked_job_ids
         )
-        binding = (
-            None
-            if job.job_id in blocked_job_ids
-            else binding_by_job.get(job.job_id)
-        )
-        if (
-            binding is None
-            and prediction is not None
-            and job.job_id not in blocked_job_ids
-        ):
+        binding = None if job.job_id in blocked_job_ids else binding_by_job.get(job.job_id)
+        if binding is None and prediction is not None and job.job_id not in blocked_job_ids:
             binding = _prediction_binding(prediction)
         if not _binding_matches(row, "effective", binding):
             return None
@@ -418,9 +409,7 @@ def load_cached_esm_rows(
             comparison_blocked,
         ) in comparison_bindings.items():
             comparison_binding = (
-                None
-                if job.job_id in comparison_blocked
-                else derived_bindings.get(job.job_id)
+                None if job.job_id in comparison_blocked else derived_bindings.get(job.job_id)
             )
             comparison_prediction = comparison_by_job.get(job.job_id)
             if (
@@ -470,15 +459,11 @@ def _chain_ca(path: Path, chain_id: str | None = None) -> dict[int, np.ndarray]:
         residue = array[start:stop]
         position = int(residue.res_id[0])
         if position <= 0 or position in result:
-            raise ValueError(
-                f"residue IDs in {path} must be unique positive sequence positions"
-            )
+            raise ValueError(f"residue IDs in {path} must be unique positive sequence positions")
         if "ins_code" in categories and any(
             str(value).strip() for value in residue.ins_code.tolist()
         ):
-            raise ValueError(
-                f"insertion-coded residue {position} in {path} is not normalized"
-            )
+            raise ValueError(f"insertion-coded residue {position} in {path} is not normalized")
         ca = residue[residue.atom_name == "CA"]
         coordinate = np.asarray(
             ca.coord[0] if len(ca) else residue.coord.mean(axis=0),
@@ -502,9 +487,7 @@ def _fold_comparison(
     common_positions = sorted(set(first) & set(second))
     count = len(common_positions)
     if count < 3:
-        raise ValueError(
-            "fewer than three common normalized residue positions are available"
-        )
+        raise ValueError("fewer than three common normalized residue positions are available")
     first_coordinates = np.asarray(
         [first[position] for position in common_positions],
         dtype=float,
@@ -516,8 +499,7 @@ def _fold_comparison(
     first_center = first_coordinates.mean(axis=0)
     second_center = second_coordinates.mean(axis=0)
     left, _values, right = np.linalg.svd(
-        (second_coordinates - second_center).T
-        @ (first_coordinates - first_center)
+        (second_coordinates - second_center).T @ (first_coordinates - first_center)
     )
     rotation = left @ right
     if np.linalg.det(rotation) < 0:
@@ -570,8 +552,7 @@ def collect_esm_rows(
         binding = (
             None
             if job.job_id in blocked_job_ids
-            else binding_by_job.get(job.job_id)
-            or _prediction_binding(prediction)
+            else binding_by_job.get(job.job_id) or _prediction_binding(prediction)
         )
         # Identity fields are controller-owned and cannot be overridden by a
         # stale or malformed runtime CSV row.
@@ -636,16 +617,8 @@ def add_esmfold_backend_comparison(
             None,
         )
         prediction = by_prediction.get(job.job_id)
-        binding = (
-            None
-            if job.job_id in blocked_job_ids
-            else binding_by_job.get(job.job_id)
-        )
-        if (
-            binding is None
-            and prediction is not None
-            and job.job_id not in blocked_job_ids
-        ):
+        binding = None if job.job_id in blocked_job_ids else binding_by_job.get(job.job_id)
+        if binding is None and prediction is not None and job.job_id not in blocked_job_ids:
             binding = _prediction_binding(prediction)
         row.update(_binding_fields(label, binding))
         comparison_path = (

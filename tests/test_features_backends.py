@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import runpy
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -21,8 +21,8 @@ from af3_binder_filter.backends import (
 )
 from af3_binder_filter.config import AerithConfig, FeatureSettings
 from af3_binder_filter.features import (
-    FeatureError,
     FeatureBundle,
+    FeatureError,
     build_feature_builder_command,
     cached_target_features,
     prepare_target_features,
@@ -68,12 +68,12 @@ def _features(tmp_path: Path) -> FeatureBundle:
     )
 
 
-def test_protenix_contract_uses_local_target_and_query_only_binder(tmp_path: Path) -> None:
+def test_protenix_contract_uses_local_target_and_query_only_binder(
+    tmp_path: Path,
+) -> None:
     features = _features(tmp_path)
     binder_msa = write_query_only_msa("ACDE", tmp_path / "binder" / "non_pairing.a3m")
-    binder_templates = write_query_only_msa(
-        "ACDE", tmp_path / "binder" / "hmmsearch.a3m"
-    )
+    binder_templates = write_query_only_msa("ACDE", tmp_path / "binder" / "hmmsearch.a3m")
 
     payload = make_protenix_style_input(
         _job(),
@@ -201,12 +201,7 @@ def test_local_feature_search_enables_mmseqs_gpu(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = runpy.run_path(
-        str(
-            Path(__file__).parents[1]
-            / "docker"
-            / "feature-builder"
-            / "build_local_features.py"
-        )
+        str(Path(__file__).parents[1] / "docker" / "feature-builder" / "build_local_features.py")
     )
     calls: list[list[str]] = []
 
@@ -242,16 +237,12 @@ def test_feature_preparation_publishes_complete_cache_atomically(
     (tmp_path / "db").mkdir()
 
     def runner(command, **_kwargs):
-        output_mount = next(
-            value for value in command if value.endswith(":/output")
-        )
+        output_mount = next(value for value in command if value.endswith(":/output"))
         output = Path(output_mount.removesuffix(":/output"))
         for name in ("pairing.a3m", "non_pairing.a3m", "hmmsearch.a3m"):
             (output / name).write_text(">query\nACDE\n")
         (output / "templates").mkdir()
-        (output / "af3_templates.json").write_text(
-            json.dumps({"version": 1, "templates": []})
-        )
+        (output / "af3_templates.json").write_text(json.dumps({"version": 1, "templates": []}))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     preparation = prepare_target_features(settings, "ACDE", runner=runner)
@@ -284,16 +275,12 @@ def test_concurrent_feature_requests_share_one_locked_gpu_build(
         with runner_lock:
             runner_calls += 1
         time.sleep(0.05)
-        output_mount = next(
-            value for value in command if value.endswith(":/output")
-        )
+        output_mount = next(value for value in command if value.endswith(":/output"))
         output = Path(output_mount.removesuffix(":/output"))
         for name in ("pairing.a3m", "non_pairing.a3m", "hmmsearch.a3m"):
             (output / name).write_text(">query\nACDE\n")
         (output / "templates").mkdir()
-        (output / "af3_templates.json").write_text(
-            json.dumps({"version": 1, "templates": []})
-        )
+        (output / "af3_templates.json").write_text(json.dumps({"version": 1, "templates": []}))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -356,16 +343,12 @@ def test_feature_cache_misses_after_sampled_database_content_changes(
     )
 
     def runner(command, **_kwargs):
-        output_mount = next(
-            value for value in command if value.endswith(":/output")
-        )
+        output_mount = next(value for value in command if value.endswith(":/output"))
         output = Path(output_mount.removesuffix(":/output"))
         for name in ("pairing.a3m", "non_pairing.a3m", "hmmsearch.a3m"):
             (output / name).write_text(">query\nACDE\n")
         (output / "templates").mkdir()
-        (output / "af3_templates.json").write_text(
-            json.dumps({"version": 1, "templates": []})
-        )
+        (output / "af3_templates.json").write_text(json.dumps({"version": 1, "templates": []}))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     preparation = prepare_target_features(settings, "ACDE", runner=runner)
@@ -522,11 +505,7 @@ def test_protenix_common_assets_use_non_overlapping_file_mounts(
         output_dir=tmp_path / "outputs",
         gpu_index=1,
     )
-    volumes = [
-        command[index + 1]
-        for index, value in enumerate(command)
-        if value == "--volume"
-    ]
+    volumes = [command[index + 1] for index, value in enumerate(command) if value == "--volume"]
 
     assert f"{common_dir.resolve()}:/protenix_data/common:ro" not in volumes
     assert "--load_checkpoint_dir" not in command
@@ -537,13 +516,11 @@ def test_protenix_common_assets_use_non_overlapping_file_mounts(
         "obsolete_release_date.csv",
     ):
         assert (
-            f"{(common_dir / filename).resolve()}:"
-            f"/protenix_data/common/{filename}:ro"
+            f"{(common_dir / filename).resolve()}:/protenix_data/common/{filename}:ro"
         ) in volumes
     for filename in ("release_date_cache.json", "obsolete_to_successor.json"):
         assert (
-            f"{(metadata_dir / filename).resolve()}:"
-            f"/protenix_data/common/{filename}:ro"
+            f"{(metadata_dir / filename).resolve()}:/protenix_data/common/{filename}:ro"
         ) in volumes
 
 
@@ -597,9 +574,7 @@ def test_runtime_staging_keeps_af3_common_but_excludes_opendde_data(
 
     staged = prepare_runtime_build_contexts(config)
 
-    assert (
-        staged / "af3-src" / "src" / "alphafold3" / "common" / "resources.py"
-    ).is_file()
+    assert (staged / "af3-src" / "src" / "alphafold3" / "common" / "resources.py").is_file()
     assert not (staged / "opendde-src" / "common").exists()
     assert (staged / "opendde-src" / "package.py").is_file()
     assert not (staged / "mmseqs-src").exists()

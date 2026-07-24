@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-
 _QUALIFIED_RESIDUE = re.compile(r"^[^:;,\s]+:(-?\d+)$")
 _QUALIFIED_PAIR = re.compile(r"^[^:;,\s]+:(-?\d+)-[^:;,\s]+:(-?\d+)$")
 _LEGACY_PAIR = re.compile(r"^(-?\d+):(-?\d+)$")
@@ -21,8 +20,7 @@ def format_contact_pairs(
     pairs: Iterable[tuple[int, int]],
 ) -> str:
     return ";".join(
-        f"{target_chain}:{target}-{binder_chain}:{binder}"
-        for target, binder in sorted(set(pairs))
+        f"{target_chain}:{target}-{binder_chain}:{binder}" for target, binder in sorted(set(pairs))
     )
 
 

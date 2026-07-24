@@ -22,6 +22,4 @@ def create_interface_energy_engine(
         return None
     if settings.energy_engine == "rosetta_cli":
         return RosettaCliEngine(settings.rosetta)
-    raise ComponentFactoryError(
-        f"unsupported interface energy engine: {settings.energy_engine}"
-    )
+    raise ComponentFactoryError(f"unsupported interface energy engine: {settings.energy_engine}")

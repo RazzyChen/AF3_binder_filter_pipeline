@@ -26,7 +26,6 @@ from af3_binder_filter.residue_format import (
     format_residue_list,
 )
 
-
 STANDARD_AMINO_ACIDS = frozenset(
     {
         "ALA",
@@ -164,9 +163,7 @@ def _exact_subsequence_positions(observed: str, expected: str) -> list[int]:
         cursor = found
     latest = list(reversed(latest_reversed))
     if earliest != latest:
-        raise InterfaceError(
-            "missing-residue mapping is ambiguous against the input sequence"
-        )
+        raise InterfaceError("missing-residue mapping is ambiguous against the input sequence")
     return earliest
 
 
@@ -182,13 +179,9 @@ def _chain_sequence_positions(
     if not observed_sequence:
         raise InterfaceError("structure chain has no standard residues")
     if len(author_residue_ids) != len(observed_sequence):
-        raise InterfaceError(
-            "structure residue identifiers do not match its residue count"
-        )
+        raise InterfaceError("structure residue identifiers do not match its residue count")
     if len(observed_sequence) > len(expected):
-        raise InterfaceError(
-            "structure contains more standard residues than the input sequence"
-        )
+        raise InterfaceError("structure contains more standard residues than the input sequence")
 
     author_positions_valid = (
         len(set(author_residue_ids)) == len(author_residue_ids)
@@ -208,9 +201,7 @@ def _chain_sequence_positions(
         return author_residue_ids, "author_residue_ids"
     if len(observed_sequence) == len(expected):
         if observed_sequence != expected:
-            raise InterfaceError(
-                "structure sequence does not match the input sequence"
-            )
+            raise InterfaceError("structure sequence does not match the input sequence")
         return list(range(1, len(expected) + 1)), "complete_sequence_order"
     return (
         _exact_subsequence_positions(observed_sequence, expected),
@@ -233,13 +224,9 @@ def _residue_records(
     author_ids = [int(chain_array.res_id[start]) for start, _stop in residue_ranges]
     residue_names = [str(chain_array.res_name[start]) for start, _stop in residue_ranges]
     try:
-        observed_sequence = "".join(
-            _AMINO_ACID_ONE_LETTER[name] for name in residue_names
-        )
+        observed_sequence = "".join(_AMINO_ACID_ONE_LETTER[name] for name in residue_names)
     except KeyError as exc:
-        raise InterfaceError(
-            f"unsupported residue {exc.args[0]!r} in chain {chain_id!r}"
-        ) from exc
+        raise InterfaceError(f"unsupported residue {exc.args[0]!r} in chain {chain_id!r}") from exc
     try:
         positions, mapping_mode = _chain_sequence_positions(
             observed_sequence=observed_sequence,
@@ -248,10 +235,7 @@ def _residue_records(
         )
     except InterfaceError as exc:
         raise InterfaceError(f"chain {chain_id!r}: {exc}") from exc
-    if (
-        len(positions) != len(set(positions))
-        or any(position <= 0 for position in positions)
-    ):
+    if len(positions) != len(set(positions)) or any(position <= 0 for position in positions):
         raise InterfaceError(
             f"chain {chain_id!r} did not map to unique positive sequence positions"
         )
@@ -327,7 +311,10 @@ def _contact_metrics(
             target_index = int(target_atom_indexes[start + local_i])
             binder_index = int(binder_atom_indexes[binder_i])
             contacts.add(
-                (target_position_by_atom[target_index], binder_position_by_atom[binder_index])
+                (
+                    target_position_by_atom[target_index],
+                    binder_position_by_atom[binder_index],
+                )
             )
             interface_atom_mask[target_index] = True
             interface_atom_mask[binder_index] = True
@@ -344,7 +331,9 @@ def _contact_metrics(
     return contacts, (minimum if math.isfinite(minimum) else None), interface_atom_mask
 
 
-def _sasa_metrics(array: Any, target_chain: str, binder_chain: str, point_number: int) -> dict[str, float]:
+def _sasa_metrics(
+    array: Any, target_chain: str, binder_chain: str, point_number: int
+) -> dict[str, float]:
     import biotite.structure as struc
 
     target = array[array.chain_id == target_chain]
@@ -407,22 +396,16 @@ def _pae_metrics(
     try:
         data = json.loads(confidence_path.read_text(encoding="utf-8"))
         pae_value = (
-            data.get("pae")
-            or data.get("predicted_aligned_error")
-            or data.get("token_pair_pae")
+            data.get("pae") or data.get("predicted_aligned_error") or data.get("token_pair_pae")
         )
         pae = np.asarray(pae_value, dtype=float)
         if pae.ndim != 2 or pae.shape[0] != pae.shape[1]:
             return empty
         chains = (
-            data.get("token_chain_ids")
-            or data.get("token_asym_ids")
-            or data.get("token_asym_id")
+            data.get("token_chain_ids") or data.get("token_asym_ids") or data.get("token_asym_id")
         )
         residue_ids = (
-            data.get("token_res_ids")
-            or data.get("token_residue_ids")
-            or data.get("token_res_id")
+            data.get("token_res_ids") or data.get("token_residue_ids") or data.get("token_res_id")
         )
         if chains is None and pae.shape[0] == len(job.target_sequence) + len(job.binder_sequence):
             chains = [job.target_chain] * len(job.target_sequence) + [job.binder_chain] * len(
@@ -512,7 +495,9 @@ def write_rosetta_pdb(
             }
         )
     pdb_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{pdb_path.name}.", suffix=".pdb", dir=pdb_path.parent)
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{pdb_path.name}.", suffix=".pdb", dir=pdb_path.parent
+    )
     os.close(fd)
     temporary_path = Path(temporary)
     try:
@@ -620,9 +605,7 @@ def analyze_interface_geometry(
                     job.target_chain, job.binder_chain, contacts
                 ),
                 "epitope_residues": format_residue_list(job.target_chain, epitope),
-                "epitope_overlap_residues": format_residue_list(
-                    job.target_chain, overlap
-                ),
+                "epitope_overlap_residues": format_residue_list(job.target_chain, overlap),
                 "epitope_overlap_count": len(overlap),
                 "epitope_coverage": len(overlap) / len(epitope) if epitope else None,
                 "epitope_purity": len(overlap) / len(target_positions)
@@ -732,10 +715,7 @@ def apply_balanced_shortlist(
         )
         epitope_pass = True
         if epitope_configured:
-            coverage_pass = (
-                float(row.get("epitope_coverage") or 0)
-                >= minimum_epitope_coverage
-            )
+            coverage_pass = float(row.get("epitope_coverage") or 0) >= minimum_epitope_coverage
             epitope_pass = coverage_pass
         row["geometry_pass"] = geometry_pass
         row["epitope_pass"] = epitope_pass

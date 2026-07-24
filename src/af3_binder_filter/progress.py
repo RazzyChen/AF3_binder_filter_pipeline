@@ -248,9 +248,7 @@ class RichProgressReporter:
     ) -> None:
         self._pipeline_started_at = time.monotonic()
         self._stages = tuple(stages)
-        self._stage_index = {
-            stage.key: index for index, stage in enumerate(self._stages, start=1)
-        }
+        self._stage_index = {stage.key: index for index, stage in enumerate(self._stages, start=1)}
         gpu_text = ",".join(str(index) for index in info.gpu_ids) or "auto"
         secondary = (
             info.secondary_backend
@@ -316,9 +314,7 @@ class RichProgressReporter:
         force: bool = False,
     ) -> None:
         if force:
-            self.console.print(
-                f"  [yellow]cache bypassed by --force[/yellow]: {total}/{total}"
-            )
+            self.console.print(f"  [yellow]cache bypassed by --force[/yellow]: {total}/{total}")
             return
         self.console.print(
             f"  [green]cache hit[/green]: {hits}/{total}  |  "
@@ -441,9 +437,7 @@ class RichProgressReporter:
             total=effective_total,
         ):
             total_text = str(effective_total) if effective_total is not None else "?"
-            self.console.print(
-                f"  {task}: {completed}/{total_text}{counter_detail}"
-            )
+            self.console.print(f"  {task}: {completed}/{total_text}{counter_detail}")
         state.completed = completed
         state.total = effective_total
 
@@ -501,9 +495,7 @@ class RichProgressReporter:
             "ERROR": "red",
         }.get(normalized, "white")
         suffix = f" — {detail}" if detail else ""
-        self.console.print(
-            f"  [{color}]{normalized}[/{color}] in {elapsed:.1f}s{suffix}"
-        )
+        self.console.print(f"  [{color}]{normalized}[/{color}] in {elapsed:.1f}s{suffix}")
         if normalized in {"FAILED", "ERROR", "PARTIAL"}:
             log_dir = self._stage_logs.get(stage)
             if log_dir is not None:
@@ -545,8 +537,7 @@ class RichProgressReporter:
         self.console.print(Rule())
         suffix = f" — {detail}" if detail else ""
         self.console.print(
-            f"[bold {color}]Pipeline {normalized}[/bold {color}] "
-            f"in {elapsed:.1f}s{suffix}"
+            f"[bold {color}]Pipeline {normalized}[/bold {color}] in {elapsed:.1f}s{suffix}"
         )
 
     def close(self) -> None:

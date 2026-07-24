@@ -11,7 +11,6 @@ from typing import Any, Callable, Protocol
 from af3_binder_filter.config import RosettaSettings
 from af3_binder_filter.io_utils import atomic_write_text
 
-
 ROSETTA_OUTPUT_FIELDS = (
     "rosetta_dSASA_int",
     "rosetta_dSASA_polar",

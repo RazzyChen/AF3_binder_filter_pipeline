@@ -6,9 +6,7 @@ import runpy
 import tarfile
 from pathlib import Path
 
-_CONVERTER = runpy.run_path(
-    str(Path(__file__).parents[1] / "scripts" / "oci_to_docker_archive.py")
-)
+_CONVERTER = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "oci_to_docker_archive.py"))
 append_manifest = _CONVERTER["append_manifest"]
 docker_manifest = _CONVERTER["docker_manifest"]
 

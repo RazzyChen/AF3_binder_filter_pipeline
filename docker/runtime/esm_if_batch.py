@@ -22,8 +22,8 @@ def main() -> None:
     for stale_marker in progress_dir.glob("*.json"):
         stale_marker.unlink()
 
-    import torch
     import esm
+    import torch
     from esm.inverse_folding.util import (
         extract_coords_from_structure,
         load_structure,
@@ -35,7 +35,11 @@ def main() -> None:
     model = model.eval().cuda() if torch.cuda.is_available() else model.eval()
     rows = []
     for job in jobs:
-        row = {"job_name": job["job_name"], "esm_if_status": "error", "esm_if_error": ""}
+        row = {
+            "job_name": job["job_name"],
+            "esm_if_status": "error",
+            "esm_if_error": "",
+        }
         try:
             structure = load_structure(job["structure_path"], job["chain_id"])
             coords, sequence = extract_coords_from_structure(structure)
@@ -51,9 +55,7 @@ def main() -> None:
         except Exception as exc:
             row["esm_if_error"] = str(exc)
         rows.append(row)
-        marker_name = hashlib.sha256(
-            str(job["job_name"]).encode("utf-8")
-        ).hexdigest()
+        marker_name = hashlib.sha256(str(job["job_name"]).encode("utf-8")).hexdigest()
         marker = progress_dir / f"{marker_name}.json"
         temporary_marker = marker.with_suffix(".json.tmp")
         temporary_marker.write_text(

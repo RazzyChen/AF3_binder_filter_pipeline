@@ -8,7 +8,6 @@ from typing import Literal
 from af3_binder_filter.config import AerithConfig
 from af3_binder_filter.progress import StageSpec
 
-
 StageCondition = Literal["always", "secondary", "esm"]
 
 

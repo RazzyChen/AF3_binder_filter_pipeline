@@ -51,9 +51,7 @@ def docker_manifest(path: Path, tag: str) -> bytes:
         if not isinstance(descriptor, dict):
             raise ConversionError("OCI image descriptor must be an object")
         manifest_digest = descriptor.get("digest")
-        if not isinstance(manifest_digest, str) or not manifest_digest.startswith(
-            "sha256:"
-        ):
+        if not isinstance(manifest_digest, str) or not manifest_digest.startswith("sha256:"):
             raise ConversionError("OCI image manifest must use a sha256 digest")
 
         manifest = _read_json(
@@ -75,15 +73,11 @@ def docker_manifest(path: Path, tag: str) -> bytes:
             digest = layer.get("digest")
             if not isinstance(digest, str) or not digest.startswith("sha256:"):
                 raise ConversionError("OCI layer must use a sha256 digest")
-            layer_paths.append(
-                "blobs/sha256/" + digest.removeprefix("sha256:")
-            )
+            layer_paths.append("blobs/sha256/" + digest.removeprefix("sha256:"))
 
         docker_payload = [
             {
-                "Config": (
-                    "blobs/sha256/" + config_digest.removeprefix("sha256:")
-                ),
+                "Config": ("blobs/sha256/" + config_digest.removeprefix("sha256:")),
                 "RepoTags": [tag],
                 "Layers": layer_paths,
             }

@@ -14,7 +14,6 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 DEFAULT_COMPLEX_JOB_NAME_TEMPLATE = "sample_{sample_no}_binder_candiate_complex_pred"
 
 
@@ -263,9 +262,7 @@ class RuntimeSettings:
     esm_source_commit: str = "2b369911bb5b4b0dda914521b9475cad1656b2ac"
     mmseqs_release: str = "18-8cc5c"
     mmseqs_version: str = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
-    mmseqs_archive_sha256: str = (
-        "83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7"
-    )
+    mmseqs_archive_sha256: str = "83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7"
     foldseek_release: str = "10-941cd33"
     foldseek_version: str = "941cd33ff0771cd2e3f144e3293e22a2b87e9fda"
     foldseek_archive_sha256: str = (
@@ -394,7 +391,10 @@ def compose_hydra_config(
         resolved = OmegaConf.merge(schema, composed)
         OmegaConf.resolve(resolved)
         obj = OmegaConf.to_object(resolved)
-    except (HydraException, Exception) as exc:  # OmegaConf has several validation subclasses
+    except (
+        HydraException,
+        Exception,
+    ) as exc:  # OmegaConf has several validation subclasses
         if isinstance(exc, ConfigError):
             raise
         raise ConfigError(f"invalid Hydra configuration {config_path}: {exc}") from exc
@@ -409,7 +409,9 @@ def config_as_dict(config: AerithConfig) -> dict[str, Any]:
     return asdict(config)
 
 
-def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> ConfigValidationReport:
+def validate_hydra_config(
+    config: AerithConfig, *, check_paths: bool = True
+) -> ConfigValidationReport:
     """Validate cross-field invariants and local resources.
 
     Docker/GPU execution checks live in ``config doctor``; this function keeps
@@ -488,22 +490,14 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
     if config.backend.name != "alphafold3":
         errors.append("the primary backend must be alphafold3")
     if config.secondary_backend.name not in {"none", "protenix", "opendde"}:
-        errors.append(
-            f"unsupported secondary backend: {config.secondary_backend.name}"
-        )
+        errors.append(f"unsupported secondary backend: {config.secondary_backend.name}")
     if config.secondary_backend.enabled and config.secondary_backend.name == "none":
         errors.append("secondary_backend.enabled cannot be true when name is none")
     if not config.secondary_backend.enabled and config.secondary_backend.name != "none":
         errors.append("secondary_backend must be enabled when a secondary backend is selected")
-    if (
-        config.secondary_backend.enabled
-        and config.secondary_backend.name == config.backend.name
-    ):
+    if config.secondary_backend.enabled and config.secondary_backend.name == config.backend.name:
         errors.append("primary and secondary backends must be different")
-    if (
-        config.secondary_backend.enabled
-        and config.secondary_backend.image != config.backend.image
-    ):
+    if config.secondary_backend.enabled and config.secondary_backend.image != config.backend.image:
         errors.append("primary and secondary backends must use the same unified image")
     if config.backend.name == "alphafold3" and not config.backend.target_name.strip():
         errors.append("backend.target_name must be non-empty for AlphaFold 3")
@@ -516,15 +510,11 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
     if config.consensus.minimum_anomaly_metrics < 1:
         errors.append("consensus.minimum_anomaly_metrics must be positive")
     if not 0 < config.consensus.target_alignment_min_fraction <= 1:
-        errors.append(
-            "consensus.target_alignment_min_fraction must be in (0, 1]"
-        )
+        errors.append("consensus.target_alignment_min_fraction must be in (0, 1]")
     if not 0 <= config.consensus.same_fold_tm_threshold <= 1:
         errors.append("consensus.same_fold_tm_threshold must be between 0 and 1")
     if not 0 <= config.consensus.explicit_different_interface_pair_jaccard <= 1:
-        errors.append(
-            "consensus.explicit_different_interface_pair_jaccard must be between 0 and 1"
-        )
+        errors.append("consensus.explicit_different_interface_pair_jaccard must be between 0 and 1")
     if config.consensus.different_pose_rmsd_threshold <= 0:
         errors.append("consensus.different_pose_rmsd_threshold must be positive")
     if config.runtime.minimum_build_free_gib < 1:
@@ -546,9 +536,7 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
                 Path(config.features.mmcif_dir).expanduser(),
             ]
             if config.features.use_environment_database:
-                required.append(
-                    mmseqs_dir / config.features.environment_database
-                )
+                required.append(mmseqs_dir / config.features.environment_database)
             for required_path in required:
                 if not required_path.exists():
                     errors.append(f"required AF3 database path does not exist: {required_path}")
@@ -566,16 +554,13 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         if config.backend.name == "alphafold3" and config.backend.target_data_json:
             target_data = Path(config.backend.target_data_json).expanduser()
             if not target_data.is_file():
-                errors.append(
-                    f"backend.target_data_json does not exist: {target_data}"
-                )
+                errors.append(f"backend.target_data_json does not exist: {target_data}")
         model_dir = Path(config.backend.model_dir).expanduser()
         if not model_dir.is_dir():
             errors.append(f"backend.model_dir does not exist: {model_dir}")
         elif config.backend.name == "opendde":
             checkpoint = Path(
-                config.backend.checkpoint_path
-                or model_dir / "checkpoint" / "opendde.pt"
+                config.backend.checkpoint_path or model_dir / "checkpoint" / "opendde.pt"
             ).expanduser()
             if not checkpoint.is_file():
                 errors.append(f"OpenDDE checkpoint does not exist: {checkpoint}")
@@ -583,15 +568,11 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
         if secondary.enabled:
             if secondary.name == "protenix":
                 checkpoint = Path(
-                    secondary.checkpoint_path
-                    or "/home/structure/checkpoint/protenix-v2.pt"
+                    secondary.checkpoint_path or "/home/structure/checkpoint/protenix-v2.pt"
                 ).expanduser()
-                common = Path(
-                    secondary.common_dir or "/home/structure/common"
-                ).expanduser()
+                common = Path(secondary.common_dir or "/home/structure/common").expanduser()
                 metadata = Path(
-                    secondary.metadata_dir
-                    or "/home/structure/Software/OpenDDE/common"
+                    secondary.metadata_dir or "/home/structure/Software/OpenDDE/common"
                 ).expanduser()
                 for path in (
                     checkpoint,
@@ -603,9 +584,7 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
                     metadata / "obsolete_to_successor.json",
                 ):
                     if not path.exists():
-                        errors.append(
-                            f"required Protenix runtime asset does not exist: {path}"
-                        )
+                        errors.append(f"required Protenix runtime asset does not exist: {path}")
             elif secondary.name == "opendde":
                 checkpoint = Path(
                     secondary.checkpoint_path
@@ -622,9 +601,7 @@ def validate_hydra_config(config: AerithConfig, *, check_paths: bool = True) -> 
                     common / "obsolete_to_successor.json",
                 ):
                     if not path.exists():
-                        errors.append(
-                            f"required OpenDDE runtime asset does not exist: {path}"
-                        )
+                        errors.append(f"required OpenDDE runtime asset does not exist: {path}")
         if config.scoring.esm.enabled:
             model_cache = Path(config.scoring.esm.model_cache).expanduser()
             if not model_cache.is_dir():

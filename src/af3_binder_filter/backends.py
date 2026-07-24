@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
@@ -144,20 +144,15 @@ class RankedJsonOutputAdapter:
         # A batched output directory can contain artifacts for many jobs. The
         # global fallback is useful for backends that add their own nesting,
         # but it must never make a failed job inherit another job's model.
-        summary_paths = [
-            path for path in summary_paths if _path_belongs_to_job(path, job.job_id)
-        ]
-        cif_paths = [
-            path for path in cif_paths if _path_belongs_to_job(path, job.job_id)
-        ]
+        summary_paths = [path for path in summary_paths if _path_belongs_to_job(path, job.job_id)]
+        cif_paths = [path for path in cif_paths if _path_belongs_to_job(path, job.job_id)]
         if not summary_paths:
             return UnifiedPrediction(
                 job.job_id,
                 self.backend_name,
                 "missing",
                 error=(
-                    f"no summary confidence JSON for job {job.job_id!r} "
-                    f"found under {output_dir}"
+                    f"no summary confidence JSON for job {job.job_id!r} found under {output_dir}"
                 ),
             )
 
@@ -263,7 +258,8 @@ class AlphaFold3OutputAdapter:
                 path
                 for root in roots
                 for path in [
-                    root / (
+                    root
+                    / (
                         f"{ranked_basename}_summary_confidences.json"
                         if ranked_basename and root != job_dir
                         else f"{job.job_id}_summary_confidences.json"
@@ -278,7 +274,8 @@ class AlphaFold3OutputAdapter:
                 path
                 for root in roots
                 for path in [
-                    root / (
+                    root
+                    / (
                         f"{ranked_basename}_confidences.json"
                         if ranked_basename and root != job_dir
                         else f"{job.job_id}_confidences.json"
@@ -293,7 +290,8 @@ class AlphaFold3OutputAdapter:
                 path
                 for root in roots
                 for path in [
-                    root / (
+                    root
+                    / (
                         f"{ranked_basename}_model.cif"
                         if ranked_basename and root != job_dir
                         else f"{job.job_id}_model.cif"
@@ -335,9 +333,7 @@ class AlphaFold3OutputAdapter:
             summary_path=summary_path,
             confidence_path=confidence_path,
             ranking_score=(
-                summary_ranking_score
-                if summary_ranking_score is not None
-                else best_score
+                summary_ranking_score if summary_ranking_score is not None else best_score
             ),
             iptm=_number(summary.get("iptm")),
             ptm=_number(summary.get("ptm")),
@@ -699,10 +695,11 @@ def create_runtime_source_bundle(
             existing_payload = json.loads(existing_manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             existing_payload = None
-        if not isinstance(existing_payload, dict) or existing_payload.get("schema") != RUNTIME_SOURCE_BUNDLE_SCHEMA:
-            raise BackendError(
-                f"refusing to replace a non-bundle path: {target_root}"
-            )
+        if (
+            not isinstance(existing_payload, dict)
+            or existing_payload.get("schema") != RUNTIME_SOURCE_BUNDLE_SCHEMA
+        ):
+            raise BackendError(f"refusing to replace a non-bundle path: {target_root}")
     target_root.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
         tempfile.mkdtemp(
@@ -771,7 +768,9 @@ def verify_runtime_source_bundle(bundle_root: Path) -> RuntimeSourceBundle:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise BackendError(f"invalid runtime source bundle manifest: {manifest_path}: {exc}") from exc
+        raise BackendError(
+            f"invalid runtime source bundle manifest: {manifest_path}: {exc}"
+        ) from exc
     if not isinstance(manifest, dict) or manifest.get("schema") != RUNTIME_SOURCE_BUNDLE_SCHEMA:
         raise BackendError(
             f"unsupported runtime source bundle schema: {manifest.get('schema') if isinstance(manifest, dict) else None}"
@@ -805,7 +804,9 @@ def verify_runtime_source_bundle(bundle_root: Path) -> RuntimeSourceBundle:
         root=root,
         bundle_sha256=actual_bundle_sha256,
         context_paths=context_paths,
-        context_sha256={name: str(verified_contexts[name]["sha256"]) for name in RUNTIME_SOURCE_CONTEXTS},
+        context_sha256={
+            name: str(verified_contexts[name]["sha256"]) for name in RUNTIME_SOURCE_CONTEXTS
+        },
         manifest=manifest,
     )
 
@@ -814,9 +815,7 @@ def prepare_runtime_build_contexts(config: AerithConfig) -> Path:
     """Stage a verified source bundle in the work directory for local builds."""
 
     target_root = (
-        Path(config.project.work_dir).expanduser().resolve()
-        / "runtime-build"
-        / "contexts"
+        Path(config.project.work_dir).expanduser().resolve() / "runtime-build" / "contexts"
     )
     # This exact work path predates the portable bundle manifest, so it may be
     # an old unmanaged staging directory. It is disposable local build state.
@@ -871,9 +870,7 @@ def build_runtime_image_command(
             verified_bundle = verify_runtime_source_bundle(resolved_context_root)
             sources = verified_bundle.context_paths
         else:
-            sources = {
-                name: resolved_context_root / name for name in RUNTIME_SOURCE_CONTEXTS
-            }
+            sources = {name: resolved_context_root / name for name in RUNTIME_SOURCE_CONTEXTS}
     if not dockerfile.is_file():
         raise BackendError(f"runtime Dockerfile does not exist: {dockerfile}")
     for name, source in sources.items():
@@ -945,9 +942,7 @@ def build_runtime_image_command(
             if verified_bundle is not None
             else "unavailable"
         )
-        command.extend(
-            ["--build-arg", f"{source_hash_arguments[context_name]}={source_sha256}"]
-        )
+        command.extend(["--build-arg", f"{source_hash_arguments[context_name]}={source_sha256}"])
     for name, source in sources.items():
         command.extend(["--build-context", f"{name}={source}"])
     command.extend(
@@ -983,20 +978,22 @@ def build_backend_command(
     ]
     if container_name:
         base.extend(["--name", container_name])
-    base.extend([
-        "--network",
-        "none",
-        "--gpus",
-        f"device={gpu_index}",
-        "--shm-size",
-        "4g",
-        "--volume",
-        f"{inputs}:/inputs:ro",
-        "--volume",
-        f"{inputs}:{inputs}:ro",
-        "--volume",
-        f"{outputs}:/outputs",
-    ])
+    base.extend(
+        [
+            "--network",
+            "none",
+            "--gpus",
+            f"device={gpu_index}",
+            "--shm-size",
+            "4g",
+            "--volume",
+            f"{inputs}:/inputs:ro",
+            "--volume",
+            f"{inputs}:{inputs}:ro",
+            "--volume",
+            f"{outputs}:/outputs",
+        ]
+    )
     if feature_dir is not None:
         feature_path = feature_dir.resolve()
         # Preserve absolute paths embedded in local-feature JSON.
@@ -1029,9 +1026,7 @@ def build_backend_command(
     input_json = f"/inputs/{backend.name}_jobs.json"
     use_template = template_mmcif_dir is not None
     if backend.name == "protenix":
-        checkpoint_dir = Path(
-            backend.checkpoint_dir or backend.model_dir
-        ).expanduser().resolve()
+        checkpoint_dir = Path(backend.checkpoint_dir or backend.model_dir).expanduser().resolve()
         common_dir = Path(backend.common_dir or backend.model_dir).expanduser().resolve()
         metadata_dir = Path(backend.metadata_dir or common_dir).expanduser().resolve()
         common_assets = (
@@ -1098,10 +1093,13 @@ def build_backend_command(
             "true",
         ]
     if backend.name == "opendde":
-        checkpoint = Path(
-            backend.checkpoint_path
-            or "/home/structure/Software/OpenDDE/checkpoint/opendde.pt"
-        ).expanduser().resolve()
+        checkpoint = (
+            Path(
+                backend.checkpoint_path or "/home/structure/Software/OpenDDE/checkpoint/opendde.pt"
+            )
+            .expanduser()
+            .resolve()
+        )
         container_checkpoint = f"/opendde_data/checkpoint/{checkpoint.name}"
         common_dir = Path(backend.common_dir or backend.model_dir).expanduser().resolve()
         base[-1:-1] = [

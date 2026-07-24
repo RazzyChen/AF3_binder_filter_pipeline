@@ -6,8 +6,9 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from af3_binder_filter.backends import build_backend_command
+
 from af3_binder_filter.af3_json import write_target_input
+from af3_binder_filter.backends import build_backend_command
 from af3_binder_filter.features import (
     AF3FeatureBundle,
     FeaturePreparation,
@@ -18,7 +19,6 @@ from af3_binder_filter.io_utils import (
     atomic_write_text,
 )
 from af3_binder_filter.jobs import sequence_sha256
-from af3_binder_filter.target_data import extract_target_features
 from af3_binder_filter.orchestration.command_runtime import run_prediction_command
 from af3_binder_filter.orchestration.context import (
     PipelineExecutionError,
@@ -36,14 +36,12 @@ from af3_binder_filter.orchestration.feature_identity import (
     af3_bundle_from_manifest,
     bind_feature_content,
 )
+from af3_binder_filter.target_data import extract_target_features
 
 
 def prepare_features_stage(context: RunContext) -> FeaturePreparation:
     log_dir = context.layout.stage("features").logs
-    if (
-        context.config.backend.name == "alphafold3"
-        and context.config.backend.target_data_json
-    ):
+    if context.config.backend.name == "alphafold3" and context.config.backend.target_data_json:
         preparation = _prepare_af3_target_features(context)
         if preparation.command:
             atomic_write_text(
@@ -91,9 +89,7 @@ def run_prepare_features_only(context: RunContext) -> FeaturePreparation:
         manifest.stage_status["features"] = (
             "dry_run" if context.config.runtime.dry_run else "success"
         )
-        manifest.status = (
-            "dry_run" if context.config.runtime.dry_run else "success"
-        )
+        manifest.status = "dry_run" if context.config.runtime.dry_run else "success"
         manifest.write(context.manifest_path)
         return preparation
     except KeyboardInterrupt:
@@ -123,10 +119,14 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
         target_sequence,
         fingerprint=fingerprint,
     )
-    cached = None if config.runtime.force else af3_bundle_from_manifest(
-        cache_dir,
-        target_sequence=target_sequence,
-        fingerprint=fingerprint,
+    cached = (
+        None
+        if config.runtime.force
+        else af3_bundle_from_manifest(
+            cache_dir,
+            target_sequence=target_sequence,
+            fingerprint=fingerprint,
+        )
     )
     if cached is not None:
         return FeaturePreparation(cached, None, reused=True)
@@ -147,9 +147,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
             build_root = cache_dir / ".target-only-dry-run"
             build_root.mkdir(parents=True, exist_ok=True)
         else:
-            build_root = Path(
-                tempfile.mkdtemp(prefix=".target-only-", dir=cache_dir)
-            )
+            build_root = Path(tempfile.mkdtemp(prefix=".target-only-", dir=cache_dir))
         input_dir = build_root / "input"
         output_dir = build_root / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -188,9 +186,7 @@ def _prepare_af3_target_features(context: RunContext) -> FeaturePreparation:
         )
         if return_code != 0:
             shutil.rmtree(build_root, ignore_errors=True)
-            raise PipelineExecutionError(
-                f"AF3 target-only feature command returned {return_code}"
-            )
+            raise PipelineExecutionError(f"AF3 target-only feature command returned {return_code}")
         target_name = target_input.stem
         candidates = [
             output_dir / f"{target_name}_data.json",

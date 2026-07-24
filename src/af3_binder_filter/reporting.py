@@ -13,7 +13,6 @@ from af3_binder_filter.residue_format import (
     normalize_residue_list,
 )
 
-
 DECISION_COLUMNS: tuple[str, ...] = (
     "job_id",
     "sample_no",
@@ -150,18 +149,13 @@ def _value(row: Mapping[str, Any], prefix: str, field: str) -> Any:
 def _backend_projection(
     row: Mapping[str, Any], prefix: str, target_chain: str, binder_chain: str
 ) -> dict[str, Any]:
-    projected = {
-        f"{prefix}_{field}": _value(row, prefix, field)
-        for field in _BACKEND_FIELDS
-    }
+    projected = {f"{prefix}_{field}": _value(row, prefix, field) for field in _BACKEND_FIELDS}
     projected[f"{prefix}_status"] = (
         row.get(f"{prefix}_job_status")
         if f"{prefix}_job_status" in row
         else row.get(
             f"{prefix}_status",
-            row.get("job_status", row.get("status"))
-            if prefix == "primary"
-            else None,
+            row.get("job_status", row.get("status")) if prefix == "primary" else None,
         )
     )
     for field, chain in (
@@ -293,9 +287,7 @@ def _common_rows(
 ) -> list[dict[str, Any]]:
     cluster_by_job = _cluster_annotations(member_rows, representative_rows)
     normalized_final_ids = tuple(str(job_id) for job_id in final_job_ids)
-    final_rank = {
-        job_id: index for index, job_id in enumerate(normalized_final_ids, start=1)
-    }
+    final_rank = {job_id: index for index, job_id in enumerate(normalized_final_ids, start=1)}
     common: list[dict[str, Any]] = []
     for raw_source in rows:
         source = _effective_source(raw_source)
@@ -328,16 +320,12 @@ def _common_rows(
                 if configured not in (None, "")
                 else ""
             ),
-            "candidate_pass": _truthy(
-                source.get("candidate_pool", source.get("candidate_pass"))
-            ),
+            "candidate_pass": _truthy(source.get("candidate_pool", source.get("candidate_pass"))),
             "selection_reasons": _selection_reasons(source),
             "manual_review": _truthy(source.get("manual_review")),
             "manual_review_reason": source.get("manual_review_reason", ""),
             "consensus_status": source.get("consensus_status"),
-            "effective_selection_reason": source.get(
-                "effective_selection_reason"
-            ),
+            "effective_selection_reason": source.get("effective_selection_reason"),
             "effective_pass": _optional_bool(source.get("effective_pass")),
             "esmfold_status": source.get("esmfold_status"),
             "esmfold_plddt": source.get("esmfold_plddt"),
@@ -345,31 +333,19 @@ def _common_rows(
             "esm_if_status": source.get("esm_if_status"),
             "esm_if_log_likelihood": source.get("esm_if_log_likelihood"),
             "esm_if_perplexity": source.get("esm_if_perplexity"),
-            "clustering_status": source.get(
-                "clustering_status", clustering_status
-            ),
-            "primary_pass": _truthy(
-                source.get("primary_final_pass", source.get("final_pass"))
-            ),
+            "clustering_status": source.get("clustering_status", clustering_status),
+            "primary_pass": _truthy(source.get("primary_final_pass", source.get("final_pass"))),
             "secondary_gate_pass": _truthy(source.get("secondary_gate_pass")),
             "secondary_pass": _truthy(source.get("secondary_final_pass")),
-            "consensus_target_alignment_rmsd": source.get(
-                "consensus_target_alignment_rmsd"
-            ),
-            "consensus_binder_fixed_frame_rmsd": source.get(
-                "consensus_binder_fixed_frame_rmsd"
-            ),
+            "consensus_target_alignment_rmsd": source.get("consensus_target_alignment_rmsd"),
+            "consensus_binder_fixed_frame_rmsd": source.get("consensus_binder_fixed_frame_rmsd"),
             "consensus_interface_fixed_frame_rmsd": source.get(
                 "consensus_interface_fixed_frame_rmsd"
             ),
             "consensus_interface_lddt": source.get("consensus_interface_lddt"),
             "consensus_binder_fold_tm": source.get("consensus_binder_fold_tm"),
-            "consensus_epitope_jaccard": source.get(
-                "consensus_epitope_jaccard"
-            ),
-            "consensus_interface_pair_jaccard": source.get(
-                "consensus_interface_pair_jaccard"
-            ),
+            "consensus_epitope_jaccard": source.get("consensus_epitope_jaccard"),
+            "consensus_interface_pair_jaccard": source.get("consensus_interface_pair_jaccard"),
             "consensus_different_pose": source.get("consensus_different_pose"),
             "esmfold_primary_binder_tm": _esmfold_tm(source, "primary"),
             "esmfold_secondary_binder_tm": _esmfold_tm(source, "secondary"),
@@ -457,11 +433,7 @@ def write_public_reports(
     review = _project_rows(common, BACKEND_REVIEW_COLUMNS)
     candidates = [row for row in public if row["candidate_pass"]]
     final_by_id = {str(row["job_id"]): row for row in public}
-    final = [
-        final_by_id[str(job_id)]
-        for job_id in final_job_ids
-        if str(job_id) in final_by_id
-    ]
+    final = [final_by_id[str(job_id)] for job_id in final_job_ids if str(job_id) in final_by_id]
     atomic_write_csv(layout.all_results, public, fieldnames=DECISION_COLUMNS)
     atomic_write_csv(layout.candidates, candidates, fieldnames=DECISION_COLUMNS)
     atomic_write_csv(layout.final_shortlist, final, fieldnames=DECISION_COLUMNS)

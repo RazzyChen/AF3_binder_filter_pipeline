@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from af3_binder_filter.config import ESMFoldConfig
-from af3_binder_filter.esmfold_score import build_esmfold_command, parse_esmfold_plddt, score_esmfold_inputs
+from af3_binder_filter.esmfold_score import (
+    build_esmfold_command,
+    parse_esmfold_plddt,
+    score_esmfold_inputs,
+)
 from af3_binder_filter.gpu import GPUInfo
 
 
@@ -15,10 +19,7 @@ def _atom_line(serial: int, residue: int, bfactor: float) -> str:
 def test_parse_esmfold_plddt_uses_atom_b_factors(tmp_path):
     pdb_path = tmp_path / "model.pdb"
     pdb_path.write_text(
-        "REMARK ignored\n"
-        + _atom_line(1, 1, 80.0)
-        + _atom_line(2, 2, 90.0)
-        + "HETATM ignored\n"
+        "REMARK ignored\n" + _atom_line(1, 1, 80.0) + _atom_line(2, 2, 90.0) + "HETATM ignored\n"
     )
 
     assert parse_esmfold_plddt(pdb_path) == 85.0

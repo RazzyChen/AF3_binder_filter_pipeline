@@ -11,7 +11,6 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
-
 EFFECTIVE_BACKEND_FIELDS: tuple[str, ...] = (
     "backend",
     "status",
@@ -88,11 +87,7 @@ def _eligible(row: Mapping[str, Any], prefix: str) -> bool:
     status = _backend_value(row, prefix, "status")
     interface_status = _backend_value(row, prefix, "interface_status")
     model_path = _backend_value(row, prefix, "best_model_path")
-    return (
-        status == "success"
-        and interface_status == "success"
-        and model_path not in (None, "")
-    )
+    return status == "success" and interface_status == "success" and model_path not in (None, "")
 
 
 def _descending(value: Any) -> tuple[int, float]:
@@ -112,11 +107,7 @@ def backend_quality_key(row: Mapping[str, Any], prefix: str) -> tuple[Any, ...]:
         not _backend_pass(row, prefix),
         _descending(_backend_value(row, prefix, "epitope_coverage")),
         _ascending(_backend_value(row, prefix, "interface_pae_mean")),
-        _ascending(
-            _backend_value(
-                row, prefix, "rosetta_dG_separated_per_dSASA_x100"
-            )
-        ),
+        _ascending(_backend_value(row, prefix, "rosetta_dG_separated_per_dSASA_x100")),
         _descending(_backend_value(row, prefix, "rosetta_packstat")),
         _descending(_backend_value(row, prefix, "iptm")),
         # A complete tie intentionally prefers the independent secondary model.
@@ -124,9 +115,7 @@ def backend_quality_key(row: Mapping[str, Any], prefix: str) -> tuple[Any, ...]:
     )
 
 
-def _selection_reason(
-    row: Mapping[str, Any], selected: str, other: str
-) -> str:
+def _selection_reason(row: Mapping[str, Any], selected: str, other: str) -> str:
     labels = (
         ("pass", not _backend_pass(row, selected), not _backend_pass(row, other)),
         (
@@ -141,16 +130,8 @@ def _selection_reason(
         ),
         (
             "rosetta_normalized_dg",
-            _ascending(
-                _backend_value(
-                    row, selected, "rosetta_dG_separated_per_dSASA_x100"
-                )
-            ),
-            _ascending(
-                _backend_value(
-                    row, other, "rosetta_dG_separated_per_dSASA_x100"
-                )
-            ),
+            _ascending(_backend_value(row, selected, "rosetta_dG_separated_per_dSASA_x100")),
+            _ascending(_backend_value(row, other, "rosetta_dG_separated_per_dSASA_x100")),
         ),
         (
             "rosetta_packstat",
@@ -173,9 +154,7 @@ def apply_effective_backend(row: Mapping[str, Any]) -> dict[str, Any]:
     """Return *row* with a complete, auditable ``effective_*`` projection."""
 
     projected = dict(row)
-    eligible = [
-        prefix for prefix in ("primary", "secondary") if _eligible(row, prefix)
-    ]
+    eligible = [prefix for prefix in ("primary", "secondary") if _eligible(row, prefix)]
     if not eligible:
         projected.update(
             {

@@ -13,7 +13,6 @@ from af3_binder_filter import __version__
 from af3_binder_filter.csv_input import CsvInputError
 from af3_binder_filter.progress import RichProgressReporter
 
-
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
@@ -164,15 +163,14 @@ def config_init(
     if backend != "alphafold3":
         raise typer.BadParameter("--backend must be alphafold3")
     if secondary_backend not in {"none", "protenix", "opendde"}:
-        raise typer.BadParameter(
-            "--secondary-backend must be none, protenix, or opendde"
-        )
+        raise typer.BadParameter("--secondary-backend must be none, protenix, or opendde")
     if output.exists() and not force:
         _fail(f"configuration already exists: {output}; use --force to replace it")
     detection = detect_environment()
     console.print(f"Docker: {detection.docker or 'not found'}")
     console.print(
-        "GPUs: " + (",".join(map(str, detection.gpu_indexes)) if detection.gpu_indexes else "not found")
+        "GPUs: "
+        + (",".join(map(str, detection.gpu_indexes)) if detection.gpu_indexes else "not found")
     )
     console.print(f"AF3 database: {detection.database_dir or 'not found'}")
     console.print("Foldseek: in-image GPU release 10-941cd33")
@@ -425,7 +423,9 @@ def analyze_interface_command(
     except Exception as exc:  # noqa: BLE001
         _fail(str(exc))
     success = sum(row.get("interface_status") == "success" for row in rows)
-    console.print(f"Interface analysis: {success}/{len(rows)} geometry successes in {context.results_dir}")
+    console.print(
+        f"Interface analysis: {success}/{len(rows)} geometry successes in {context.results_dir}"
+    )
 
 
 @app.command("cluster")

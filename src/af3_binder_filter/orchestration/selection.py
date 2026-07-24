@@ -8,6 +8,7 @@ from typing import (
     Any,
     Sequence,
 )
+
 from af3_binder_filter.backends import UnifiedPrediction
 from af3_binder_filter.jobs import JobSpec
 
@@ -81,9 +82,7 @@ def final_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def secondary_gate_job_ids(
-    predictions: Sequence[UnifiedPrediction], threshold: float
-) -> set[str]:
+def secondary_gate_job_ids(predictions: Sequence[UnifiedPrediction], threshold: float) -> set[str]:
     """Gate on fingerprint-valid AF3 metrics, not AF3 structure/geometry success."""
 
     return {

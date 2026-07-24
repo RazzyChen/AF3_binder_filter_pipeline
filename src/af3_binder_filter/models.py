@@ -36,7 +36,6 @@ class BinderCsvRow(BaseModel):
         invalid = sorted(set(sequence) - allowed)
         if invalid:
             raise ValueError(
-                f"{info.field_name} contains unsupported amino-acid letters: "
-                f"{''.join(invalid)}"
+                f"{info.field_name} contains unsupported amino-acid letters: {''.join(invalid)}"
             )
         return sequence

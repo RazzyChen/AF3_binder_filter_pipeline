@@ -21,8 +21,8 @@ from af3_binder_filter.orchestration.command_runtime import run_sharded_commands
 from af3_binder_filter.orchestration.context import (
     GpuJobShard,
     RunContext,
-    runtime_gpus,
     plan_gpu_job_shards,
+    runtime_gpus,
 )
 from af3_binder_filter.orchestration.esm_stage import esm_stage
 
@@ -135,6 +135,7 @@ def test_prediction_stage_binds_feature_identity_before_cache_lookup(
     assert [prediction.status for prediction in predictions] == ["success"]
     assert not failed
 
+
 def test_gpu_job_shards_use_deterministic_weighted_lpt() -> None:
     jobs = tuple(
         replace(_job(index), binder_sequence="A" * length)
@@ -215,11 +216,7 @@ def test_sharded_runner_preserves_negative_return_codes(
     assert return_codes == {0: 0, 2: -9}
     assert errors == []
     command_log = (
-        tmp_path
-        / "stages"
-        / "03_primary_prediction"
-        / "logs"
-        / "prediction.command.txt"
+        tmp_path / "stages" / "03_primary_prediction" / "logs" / "prediction.command.txt"
     ).read_text()
     assert "# gpu=0 jobs=job_0" in command_log
     assert "# gpu=2 jobs=job_1" in command_log
@@ -547,9 +544,7 @@ def test_esm_cache_requires_complete_parseable_outputs(tmp_path: Path) -> None:
     score_path.write_text(header + row + row)
     assert load() is None
 
-    score_path.write_text(
-        header + row.replace(",-1.0,-1.0,3.0,", ",-1.0,-1.0,nan,")
-    )
+    score_path.write_text(header + row.replace(",-1.0,-1.0,3.0,", ",-1.0,-1.0,nan,"))
     assert load() is None
 
     score_path.write_text(header + row)

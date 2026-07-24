@@ -217,8 +217,7 @@ def _validate_release_provenance(inspect: dict[str, Any]) -> None:
     ]
     if invalid:
         raise ImageExportError(
-            "image is missing release-grade SHA256 provenance labels: "
-            + ", ".join(invalid)
+            "image is missing release-grade SHA256 provenance labels: " + ", ".join(invalid)
         )
 
 
@@ -295,9 +294,7 @@ def export_runtime_image(
             save_returncode = save_process.wait()
             save_stderr.seek(0)
             save_error = save_stderr.read().decode("utf-8", errors="replace").strip()
-            compress_error = (compress_stderr or b"").decode(
-                "utf-8", errors="replace"
-            ).strip()
+            compress_error = (compress_stderr or b"").decode("utf-8", errors="replace").strip()
             if save_returncode != 0:
                 raise ImageExportError(
                     f"docker image save failed with return code {save_returncode}: {save_error}"

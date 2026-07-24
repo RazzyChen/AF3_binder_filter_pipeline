@@ -1,4 +1,3 @@
-
 """Input CSV parsing and validation."""
 
 from __future__ import annotations
@@ -9,7 +8,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from af3_binder_filter.models import BinderCsvRow
-
 
 REQUIRED_COLUMNS = ("sample_no", "run_name", "binder_sequence", "target_seq")
 

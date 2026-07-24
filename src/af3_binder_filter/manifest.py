@@ -9,9 +9,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from af3_binder_filter.io_utils import atomic_write_json
-from af3_binder_filter.jobs import JobPlan, JobSpec
+from af3_binder_filter.jobs import JobSpec
 from af3_binder_filter.output_layout import OUTPUT_SCHEMA_VERSION
-
 
 MANIFEST_VERSION = 4
 JOB_MANIFEST_NAME = ".aerith_manifest.json"

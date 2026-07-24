@@ -60,9 +60,7 @@ def test_run_pipeline_remains_a_thin_compatibility_entry_point(monkeypatch) -> N
     reporter = object()
     monkeypatch.setattr(pipeline_module, "PipelineRunner", FakeRunner)
 
-    assert pipeline_module.run_pipeline(context, reporter=reporter) == [
-        {"status": "success"}
-    ]
+    assert pipeline_module.run_pipeline(context, reporter=reporter) == [{"status": "success"}]
     assert observed == {"context": context, "reporter": reporter}
 
 

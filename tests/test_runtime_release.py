@@ -47,9 +47,7 @@ def _runtime_config(tmp_path: Path, sources: dict[str, Path]) -> AerithConfig:
     config.runtime.opendde_source_commit = "deadbeef"
     config.runtime.esm_source_commit = "deadbeef"
     config.runtime.minimum_build_free_gib = 0
-    config.runtime.dockerfile = str(
-        Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile"
-    )
+    config.runtime.dockerfile = str(Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile")
     return config
 
 
@@ -72,14 +70,7 @@ def test_source_bundle_is_filtered_hashed_and_does_not_touch_sources(
     assert (sources["af3"] / ".venv" / "must-not-copy").is_file()
     assert not (bundle.root / "opendde-src" / "common").exists()
     assert not (bundle.root / "af3-src" / ".venv").exists()
-    assert (
-        bundle.root
-        / "af3-src"
-        / "src"
-        / "alphafold3"
-        / "common"
-        / "resources.py"
-    ).is_file()
+    assert (bundle.root / "af3-src" / "src" / "alphafold3" / "common" / "resources.py").is_file()
     manifest = json.loads((bundle.root / "manifest.json").read_text())
     assert manifest["bundle_sha256"] == bundle.bundle_sha256
     assert set(manifest["contexts"]) == {
@@ -122,9 +113,7 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
         build_runtime_image_command(config, source_bundle=bundle.root)
 
 
-_EXPORTER = runpy.run_path(
-    str(Path(__file__).parents[1] / "scripts" / "export_runtime_image.py")
-)
+_EXPORTER = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "export_runtime_image.py"))
 export_commands = _EXPORTER["export_commands"]
 export_runtime_image = _EXPORTER["export_runtime_image"]
 immutable_tag_for_image = _EXPORTER["immutable_tag_for_image"]
@@ -164,7 +153,9 @@ def test_production_export_rejects_missing_sha256_provenance(tmp_path: Path) -> 
         )
 
 
-def test_export_writes_checksum_metadata_and_content_derived_tag(tmp_path: Path) -> None:
+def test_export_writes_checksum_metadata_and_content_derived_tag(
+    tmp_path: Path,
+) -> None:
     image_id = "sha256:" + "b" * 64
     provenance = {
         "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
@@ -230,9 +221,7 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(tmp_path: Path)
     expected_bytes = b"compressed docker archive"
     assert result.archive.read_bytes() == expected_bytes
     assert result.archive_sha256 == hashlib.sha256(expected_bytes).hexdigest()
-    assert result.checksum_file.read_text() == (
-        f"{result.archive_sha256}  {result.archive.name}\n"
-    )
+    assert result.checksum_file.read_text() == (f"{result.archive_sha256}  {result.archive.name}\n")
     metadata = json.loads(result.metadata_file.read_text())
     assert metadata["archive_format"] == "docker-image-save+zstd"
     assert metadata["immutable_tag"] == result.immutable_tag

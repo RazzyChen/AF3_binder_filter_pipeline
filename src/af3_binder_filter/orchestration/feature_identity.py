@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+
 from af3_binder_filter.af3_json import TargetFeatures
 from af3_binder_filter.features import (
     AF3FeatureBundle,
@@ -18,14 +19,14 @@ from af3_binder_filter.manifest import (
     RunManifest,
     load_manifest,
 )
-from af3_binder_filter.secondary_features import (
-    SecondaryFeatureBundle,
-    secondary_feature_bundle_content_sha256,
-)
 from af3_binder_filter.orchestration.context import (
     RunContext,
     context_feature_fingerprint,
     expected_feature_cache_dir,
+)
+from af3_binder_filter.secondary_features import (
+    SecondaryFeatureBundle,
+    secondary_feature_bundle_content_sha256,
 )
 
 
@@ -34,10 +35,7 @@ def target_feature_cache_hit(context: RunContext) -> bool:
 
     if context.config.runtime.force:
         return False
-    if (
-        context.config.backend.name == "alphafold3"
-        and context.config.backend.target_data_json
-    ):
+    if context.config.backend.name == "alphafold3" and context.config.backend.target_data_json:
         fingerprint = context_feature_fingerprint(context)
         return (
             af3_bundle_from_manifest(
@@ -164,11 +162,7 @@ def primary_prediction_feature_identity(context: RunContext) -> str:
     feature_fingerprint = context_feature_fingerprint(context)
     manifest_path = getattr(context, "manifest_path", None)
     payload = load_manifest(manifest_path) if isinstance(manifest_path, Path) else None
-    content_sha256 = (
-        payload.get("feature_content_sha256")
-        if isinstance(payload, dict)
-        else None
-    )
+    content_sha256 = payload.get("feature_content_sha256") if isinstance(payload, dict) else None
     if not isinstance(content_sha256, str) or not content_sha256:
         # Compatibility for direct library callers that predate/run outside a
         # validated RunContext. Production standalone CLI manifests require

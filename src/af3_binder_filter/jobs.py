@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from af3_binder_filter.af3_json import format_job_name
 from af3_binder_filter.config import AerithConfig
@@ -81,7 +81,9 @@ def build_job_plan_from_rows(rows: Sequence[BinderCsvRow], config: AerithConfig)
     if len(target_sequences) != 1:
         details = sorted((row.source_row_number, row.target_seq) for row in rows)
         preview = ", ".join(f"row {number}" for number, _ in details[:8])
-        raise CsvInputError(f"all jobs in one run must share one target sequence; mismatch at {preview}")
+        raise CsvInputError(
+            f"all jobs in one run must share one target sequence; mismatch at {preview}"
+        )
     if not config.project.target_chain.strip() or not config.project.binder_chain.strip():
         raise CsvInputError("target and binder chain IDs must be non-empty")
     if config.project.target_chain == config.project.binder_chain:
@@ -267,8 +269,7 @@ def _directory_listing_identity(
             (
                 entry
                 for entry in root.iterdir()
-                if not prefixes
-                or any(entry.name.startswith(prefix) for prefix in prefixes)
+                if not prefixes or any(entry.name.startswith(prefix) for prefix in prefixes)
             ),
             key=lambda entry: entry.name,
         )
@@ -283,8 +284,7 @@ def _directory_listing_identity(
         # first members. This remains bounded while covering both ends and
         # the interior of large template releases.
         indices = {
-            round(index * (len(entries) - 1) / (max_entries - 1))
-            for index in range(max_entries)
+            round(index * (len(entries) - 1) / (max_entries - 1)) for index in range(max_entries)
         }
         selected = [entries[index] for index in sorted(indices)]
     metadata: list[dict[str, Any]] = []
@@ -400,14 +400,10 @@ def aerith_source_identity() -> dict[str, str | None]:
         "git_commit": git_commit,
         "runtime_source_sha256": digest.hexdigest(),
         "pyproject_sha256": (
-            file_sha256(repository_root / "pyproject.toml")
-            if repository_root is not None
-            else None
+            file_sha256(repository_root / "pyproject.toml") if repository_root is not None else None
         ),
         "uv_lock_sha256": (
-            file_sha256(repository_root / "uv.lock")
-            if repository_root is not None
-            else None
+            file_sha256(repository_root / "uv.lock") if repository_root is not None else None
         ),
     }
 
@@ -421,9 +417,7 @@ def output_schema_identity() -> dict[str, Any]:
     return {
         "version": OUTPUT_SCHEMA_VERSION,
         "decision_columns_sha256": _canonical_digest(list(DECISION_COLUMNS)),
-        "backend_review_columns_sha256": _canonical_digest(
-            list(BACKEND_REVIEW_COLUMNS)
-        ),
+        "backend_review_columns_sha256": _canonical_digest(list(BACKEND_REVIEW_COLUMNS)),
     }
 
 
@@ -501,9 +495,7 @@ def json_asset_identity(value: str | Path | None) -> dict[str, Any] | None:
             if candidate.is_file():
                 references[pointer] = file_asset_identity(candidate)
             elif candidate.is_dir():
-                references[pointer] = _directory_listing_identity(
-                    candidate, max_entries=256
-                )
+                references[pointer] = _directory_listing_identity(candidate, max_entries=256)
 
     walk(payload, "")
     result["referenced_assets"] = references
@@ -558,11 +550,7 @@ def feature_settings_scientific_identity(
         "mmseqs_binary": (
             file_asset_identity(mmseqs_binary)
             if mmseqs_binary and "/" in mmseqs_binary
-            else {
-                "command": Path(mmseqs_binary).name
-                if mmseqs_binary
-                else "runtime:mmseqs"
-            }
+            else {"command": Path(mmseqs_binary).name if mmseqs_binary else "runtime:mmseqs"}
         ),
         "use_gpu": settings.use_gpu,
         "split_memory_limit": settings.split_memory_limit,
@@ -620,9 +608,7 @@ def feature_generation_fingerprint(
                 "backend_runtime_image_reference": (
                     None if config.backend.image_id else config.backend.image
                 ),
-                "target_data_identity": json_asset_identity(
-                    config.backend.target_data_json
-                ),
+                "target_data_identity": json_asset_identity(config.backend.target_data_json),
             }
         )
     features = (
@@ -645,15 +631,9 @@ def _rosetta_database_identity(config: AerithConfig) -> dict[str, Any]:
     score_name = settings.score_function
     return {
         "release": _directory_listing_identity(root, max_entries=64),
-        "score_weights": file_asset_identity(
-            root / "scoring" / "weights" / f"{score_name}.wts"
-        ),
+        "score_weights": file_asset_identity(root / "scoring" / "weights" / f"{score_name}.wts"),
         "residue_types": file_asset_identity(
-            root
-            / "chemical"
-            / "residue_type_sets"
-            / "fa_standard"
-            / "residue_types.txt"
+            root / "chemical" / "residue_type_sets" / "fa_standard" / "residue_types.txt"
         ),
     }
 
@@ -665,9 +645,7 @@ def scientific_config_identity(config: AerithConfig) -> dict[str, Any]:
     if config.secondary_backend.enabled:
         secondary = _backend_identity(config.secondary_backend)
         secondary["enabled"] = True
-        secondary["minimum_primary_iptm"] = (
-            config.secondary_backend.minimum_primary_iptm
-        )
+        secondary["minimum_primary_iptm"] = config.secondary_backend.minimum_primary_iptm
     else:
         secondary = {"enabled": False, "name": "none"}
     features = feature_settings_scientific_identity(config.features)
@@ -690,8 +668,7 @@ def scientific_config_identity(config: AerithConfig) -> dict[str, Any]:
         ),
         "esmfold_checkpoint": (
             file_asset_identity(
-                Path(esm_settings.model_cache).expanduser()
-                / esm_settings.esmfold_checkpoint
+                Path(esm_settings.model_cache).expanduser() / esm_settings.esmfold_checkpoint
             )
             if esm_settings.esmfold
             else None
@@ -707,18 +684,12 @@ def scientific_config_identity(config: AerithConfig) -> dict[str, Any]:
         interface["rosetta"]["binary_identity"] = file_asset_identity(
             config.interface.rosetta.binary
         )
-        interface["rosetta"]["database_identity"] = _rosetta_database_identity(
-            config
-        )
+        interface["rosetta"]["database_identity"] = _rosetta_database_identity(config)
     else:
         interface["rosetta"] = None
-    clustering = _without(
-        asdict(config.clustering), "max_workers", "foldseek_binary"
-    )
+    clustering = _without(asdict(config.clustering), "max_workers", "foldseek_binary")
     clustering["foldseek_binary"] = file_asset_identity(
-        config.clustering.foldseek_binary
-        if "/" in config.clustering.foldseek_binary
-        else None
+        config.clustering.foldseek_binary if "/" in config.clustering.foldseek_binary else None
     ) or {"command": Path(config.clustering.foldseek_binary).name}
     return {
         "backend": backend,
@@ -792,23 +763,17 @@ def job_fingerprint(
             "backend": config.backend.name,
             "model": config.backend.model,
             "runtime_image_id": config.backend.image_id,
-            "runtime_image_reference": (
-                None if config.backend.image_id else config.backend.image
-            ),
+            "runtime_image_reference": (None if config.backend.image_id else config.backend.image),
             "source_commit": config.backend.source_commit,
             "checkpoint": checkpoint_identity(config.backend.checkpoint_path),
             "secondary_backend": config.secondary_backend.name,
             "secondary_model": config.secondary_backend.model,
             "secondary_runtime_image_id": config.secondary_backend.image_id,
             "secondary_runtime_image_reference": (
-                None
-                if config.secondary_backend.image_id
-                else config.secondary_backend.image
+                None if config.secondary_backend.image_id else config.secondary_backend.image
             ),
             "secondary_source_commit": config.secondary_backend.source_commit,
-            "secondary_checkpoint": checkpoint_identity(
-                config.secondary_backend.checkpoint_path
-            ),
+            "secondary_checkpoint": checkpoint_identity(config.secondary_backend.checkpoint_path),
             "secondary_minimum_primary_iptm": config.secondary_backend.minimum_primary_iptm,
             "feature_mode": config.features.name,
             "feature_runtime_image_id": config.features.image_id,

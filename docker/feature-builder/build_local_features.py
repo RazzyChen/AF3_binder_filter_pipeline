@@ -42,9 +42,7 @@ def _merge_a3ms(paths: list[Path], query: str, output_path: Path) -> None:
             if sequence and sequence not in seen_sequences:
                 seen_sequences.add(sequence)
                 merged.append((header, sequence))
-    output_path.write_text(
-        "".join(f"{header}\n{sequence}\n" for header, sequence in merged)
-    )
+    output_path.write_text("".join(f"{header}\n{sequence}\n" for header, sequence in merged))
 
 
 def _run_mmseqs_search(
@@ -186,8 +184,7 @@ def _template_search(msa_path: Path, database: Path, output_path: Path) -> None:
         identifier = lines[0].removeprefix(">")
         sequence = "".join(lines[1:])
         af3_hits.append(
-            f">{identifier}/1-{len(sequence)} mol:protein length:{len(sequence)}\n"
-            f"{sequence}\n"
+            f">{identifier}/1-{len(sequence)} mol:protein length:{len(sequence)}\n{sequence}\n"
         )
     hits_fasta.write_text("".join(af3_hits))
     aligned = subprocess.run(

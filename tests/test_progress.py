@@ -6,18 +6,18 @@ from pathlib import Path
 from rich.console import Console
 
 from af3_binder_filter.config_tools import EnvironmentDetection, write_initial_config
+from af3_binder_filter.orchestration.command_runtime import stable_completion_probe
+from af3_binder_filter.orchestration.context import (
+    create_run_context,
+    pipeline_stage_specs,
+)
+from af3_binder_filter.orchestration.pipeline import run_pipeline
 from af3_binder_filter.progress import (
     NullProgressReporter,
     PipelineRunInfo,
     RichProgressReporter,
     StageSpec,
 )
-from af3_binder_filter.orchestration.command_runtime import stable_completion_probe
-from af3_binder_filter.orchestration.context import (
-    pipeline_stage_specs,
-    create_run_context,
-)
-from af3_binder_filter.orchestration.pipeline import run_pipeline
 
 
 class RecordingReporter(NullProgressReporter):
@@ -76,9 +76,7 @@ def _database(root: Path) -> Path:
 
 def _csv(path: Path) -> Path:
     path.write_text(
-        "sample_no,run_name,binder_sequence,target_seq\n"
-        "1,run_1,ACDE,LMNP\n"
-        "2,run_2,FGHI,LMNP\n"
+        "sample_no,run_name,binder_sequence,target_seq\n1,run_1,ACDE,LMNP\n2,run_2,FGHI,LMNP\n"
     )
     return path
 

@@ -28,18 +28,6 @@ from af3_binder_filter.features import (
 from af3_binder_filter.io_utils import atomic_write_csv, atomic_write_text
 from af3_binder_filter.jobs import JobSpec, file_sha256
 from af3_binder_filter.manifest import RunManifest
-from af3_binder_filter.progress import (
-    NullProgressReporter,
-    PipelineProgressReporter,
-    PipelineRunInfo,
-)
-from af3_binder_filter.reporting import write_public_reports
-from af3_binder_filter.secondary_features import (
-    SecondaryFeatureBundle,
-    adapt_af3_features_for_secondary,
-    adapt_local_features_for_secondary,
-)
-
 from af3_binder_filter.orchestration.clustering_stage import clustering_stage
 from af3_binder_filter.orchestration.command_runtime import run_sharded_commands
 from af3_binder_filter.orchestration.context import (
@@ -51,9 +39,9 @@ from af3_binder_filter.orchestration.context import (
     context_feature_fingerprint,
     existing_or_new_manifest,
     pipeline_stage_specs,
+    plan_gpu_job_shards,
     record_gpu_assignments,
     runtime_gpus,
-    plan_gpu_job_shards,
 )
 from af3_binder_filter.orchestration.esm_stage import esm_stage
 from af3_binder_filter.orchestration.feature_identity import (
@@ -62,8 +50,8 @@ from af3_binder_filter.orchestration.feature_identity import (
 )
 from af3_binder_filter.orchestration.feature_stage import prepare_features_stage
 from af3_binder_filter.orchestration.interface_stage import (
-    interface_stage_failed,
     interface_stage,
+    interface_stage_failed,
 )
 from af3_binder_filter.orchestration.prediction_stage import (
     prediction_rows,
@@ -79,7 +67,17 @@ from af3_binder_filter.orchestration.selection import (
     merge_rows_by_job,
     secondary_gate_job_ids,
 )
-
+from af3_binder_filter.progress import (
+    NullProgressReporter,
+    PipelineProgressReporter,
+    PipelineRunInfo,
+)
+from af3_binder_filter.reporting import write_public_reports
+from af3_binder_filter.secondary_features import (
+    SecondaryFeatureBundle,
+    adapt_af3_features_for_secondary,
+    adapt_local_features_for_secondary,
+)
 
 PrimaryFeatureBundle = AF3FeatureBundle | FeatureBundle
 
@@ -156,9 +154,7 @@ class PipelineRunner:
                 job_count=len(self.context.plan.jobs),
                 primary_backend=config.backend.name,
                 secondary_backend=(
-                    config.secondary_backend.name
-                    if config.secondary_backend.enabled
-                    else "none"
+                    config.secondary_backend.name if config.secondary_backend.enabled else "none"
                 ),
                 gpu_ids=tuple(config.runtime.gpu_ids),
                 results_dir=self.context.results_dir,
@@ -195,9 +191,7 @@ class PipelineRunner:
     def _run_preflight(self) -> None:
         config = self.context.config
         manifest = self.state.manifest
-        self.reporter.message(
-            "Preflight: validating configuration, images, paths, and GPU policy"
-        )
+        self.reporter.message("Preflight: validating configuration, images, paths, and GPU policy")
         if config.runtime.dry_run:
             manifest.stage_status["preflight"] = "dry_run"
             self.reporter.message("Preflight: DRY-RUN")
@@ -207,16 +201,10 @@ class PipelineRunner:
         validation = validate_hydra_config(config)
         errors = list(validation.errors)
         if config.backend.image_id is None:
+            errors.append(f"backend Docker image is not available: {config.backend.image}")
+        if config.secondary_backend.enabled and config.secondary_backend.image_id is None:
             errors.append(
-                f"backend Docker image is not available: {config.backend.image}"
-            )
-        if (
-            config.secondary_backend.enabled
-            and config.secondary_backend.image_id is None
-        ):
-            errors.append(
-                "secondary backend Docker image is not available: "
-                f"{config.secondary_backend.image}"
+                f"secondary backend Docker image is not available: {config.secondary_backend.image}"
             )
         if errors:
             message = "pipeline preflight failed: " + "; ".join(errors)
@@ -296,16 +284,10 @@ class PipelineRunner:
         context = self.context
         config = context.config
         manifest = self.state.manifest
-        message = (
-            "# deferred until GPU MMseqs2 preprocessing produces "
-            "validated features\n"
-        )
+        message = "# deferred until GPU MMseqs2 preprocessing produces validated features\n"
         if preparation.bundle is not None:
             input_root = (
-                Path(config.project.work_dir)
-                / context.run_id
-                / "inputs"
-                / config.backend.name
+                Path(config.project.work_dir) / context.run_id / "inputs" / config.backend.name
             )
             write_backend_inputs(
                 context.plan.jobs,
@@ -370,8 +352,7 @@ class PipelineRunner:
             )
         else:
             atomic_write_text(
-                context.layout.stage("primary_prediction").logs
-                / "prediction.command.txt",
+                context.layout.stage("primary_prediction").logs / "prediction.command.txt",
                 message,
             )
 
@@ -423,8 +404,7 @@ class PipelineRunner:
         esm_output = esm_layout.artifacts / "esm"
         esm_output.mkdir(parents=True, exist_ok=True)
         missing_predictions = [
-            UnifiedPrediction(job.job_id, "alphafold3", "missing")
-            for job in context.plan.jobs
+            UnifiedPrediction(job.job_id, "alphafold3", "missing") for job in context.plan.jobs
         ]
         write_esm_inputs(context.plan.jobs, missing_predictions, esm_input)
         if config.scoring.esm.esmfold:
@@ -555,10 +535,7 @@ class PipelineRunner:
         )
 
     def _secondary_detail(self) -> str:
-        return (
-            f"{len(self.state.eligible_jobs)} eligible / "
-            f"{len(self.context.plan.jobs)} total"
-        )
+        return f"{len(self.state.eligible_jobs)} eligible / {len(self.context.plan.jobs)} total"
 
     def _run_secondary_features(self) -> None:
         primary_features = self.state.primary_features
@@ -682,11 +659,7 @@ class PipelineRunner:
             state.secondary_rows,
             energy_engine=self.context.config.interface.energy_engine,
         )
-        status = (
-            "skipped"
-            if not state.eligible_jobs
-            else ("partial" if failed else "success")
-        )
+        status = "skipped" if not state.eligible_jobs else ("partial" if failed else "success")
         state.manifest.stage_status["secondary_interface"] = status
         self._finish_stage("secondary_interface", status, detail)
         state.required_failure |= failed
@@ -733,9 +706,7 @@ class PipelineRunner:
             failed = False
         status = "partial" if failed else "success"
         manifest.stage_status["consensus"] = status
-        error_count = sum(
-            row.get("consensus_status") == "error" for row in final_rows
-        )
+        error_count = sum(row.get("consensus_status") == "error" for row in final_rows)
         self.reporter.task_finished(
             "consensus",
             "Merge backend results",
@@ -751,17 +722,13 @@ class PipelineRunner:
             context.plan.jobs,
             state.final_rows,
         )
-        state.candidates = [
-            row for row in state.final_rows if row.get("candidate_pool")
-        ]
+        state.candidates = [row for row in state.final_rows if row.get("candidate_pool")]
         self._write_consensus_outputs()
         self._finish_stage("consensus", status)
 
     def _annotate_candidate_pool(self, final_rows: list[dict[str, Any]]) -> None:
         config = self.context.config
-        secondary_by_job = {
-            str(row["job_name"]): row for row in self.state.secondary_rows
-        }
+        secondary_by_job = {str(row["job_name"]): row for row in self.state.secondary_rows}
         eligible_ids = {job.job_id for job in self.state.eligible_jobs}
         for row in final_rows:
             job_name = str(row["job_name"])
@@ -777,15 +744,11 @@ class PipelineRunner:
             secondary_pass = bool(secondary.get("final_pass"))
             row["secondary_gate_pass"] = job_name in eligible_ids
             row["cross_validation_pass"] = (
-                job_name in eligible_ids
-                and secondary_success
-                and (primary_pass or secondary_pass)
+                job_name in eligible_ids and secondary_success and (primary_pass or secondary_pass)
             )
             row["candidate_pool"] = row["cross_validation_pass"]
             review_reasons = {
-                value
-                for value in str(row.get("manual_review_reason", "")).split(";")
-                if value
+                value for value in str(row.get("manual_review_reason", "")).split(";") if value
             }
             if secondary_success and secondary_pass and not primary_pass:
                 review_reasons.add("secondary_rescue")
@@ -813,9 +776,7 @@ class PipelineRunner:
         layout = self.context.layout.stage("consensus")
         results_path = layout.tables / "consensus_results.csv"
         candidates_path = layout.tables / "candidates_full.csv"
-        manual_review = [
-            row for row in state.final_rows if row.get("manual_review")
-        ]
+        manual_review = [row for row in state.final_rows if row.get("manual_review")]
         atomic_write_csv(results_path, state.final_rows)
         atomic_write_csv(candidates_path, state.candidates)
         atomic_write_csv(
@@ -823,12 +784,8 @@ class PipelineRunner:
             state.secondary_rows,
         )
         atomic_write_csv(layout.tables / "manual_review.csv", manual_review)
-        state.manifest.artifact_sha256["consensus_results"] = (
-            file_sha256(results_path) or ""
-        )
-        state.manifest.artifact_sha256["consensus_candidates"] = (
-            file_sha256(candidates_path) or ""
-        )
+        state.manifest.artifact_sha256["consensus_results"] = file_sha256(results_path) or ""
+        state.manifest.artifact_sha256["consensus_candidates"] = file_sha256(candidates_path) or ""
         state.manifest.write(self.context.manifest_path)
 
     def _run_esm(self) -> None:
@@ -860,9 +817,7 @@ class PipelineRunner:
             state.manifest.stage_status["esm"] = "disabled"
         state.final_rows = merge_rows_by_job(state.final_rows, esm_rows)
         state.final_rows.sort(key=final_sort_key)
-        state.candidates = [
-            row for row in state.final_rows if row.get("candidate_pool")
-        ]
+        state.candidates = [row for row in state.final_rows if row.get("candidate_pool")]
         state.required_failure |= failed
 
     def _run_clustering(self) -> None:
@@ -876,19 +831,12 @@ class PipelineRunner:
         self._start_stage("clustering")
         state.manifest.stage_status["clustering"] = "running"
         state.manifest.write(context.manifest_path)
-        candidate_ids = {
-            str(row["job_name"]) for row in clustering_candidates
-        }
-        cluster_jobs = tuple(
-            job for job in context.plan.jobs if job.job_id in candidate_ids
-        )
+        candidate_ids = {str(row["job_name"]) for row in clustering_candidates}
+        cluster_jobs = tuple(job for job in context.plan.jobs if job.job_id in candidate_ids)
         cluster_predictions = tuple(
             effective_predictions_from_rows(cluster_jobs, clustering_candidates)
         )
-        detail = (
-            f"{len(cluster_jobs)} candidates / "
-            f"{len(context.plan.jobs)} total"
-        )
+        detail = f"{len(cluster_jobs)} candidates / {len(context.plan.jobs)} total"
         self.reporter.task_started(
             "clustering",
             "Foldseek clustering",
@@ -958,9 +906,7 @@ class PipelineRunner:
             state.final_rows,
             member_rows=outcome.member_rows,
             representative_rows=outcome.representative_rows,
-            final_job_ids=tuple(
-                str(row.get("job_name")) for row in outcome.final_rows
-            ),
+            final_job_ids=tuple(str(row.get("job_name")) for row in outcome.final_rows),
             clustering_status=state.manifest.stage_status["clustering"],
         )
         self._bind_public_report_hashes()
@@ -988,18 +934,12 @@ class PipelineRunner:
     def _bind_public_report_hashes(self) -> None:
         manifest = self.state.manifest
         layout = self.context.layout
-        manifest.artifact_sha256["public_all_results"] = (
-            file_sha256(layout.all_results) or ""
-        )
-        manifest.artifact_sha256["public_candidates"] = (
-            file_sha256(layout.candidates) or ""
-        )
+        manifest.artifact_sha256["public_all_results"] = file_sha256(layout.all_results) or ""
+        manifest.artifact_sha256["public_candidates"] = file_sha256(layout.candidates) or ""
         manifest.artifact_sha256["public_final_shortlist"] = (
             file_sha256(layout.final_shortlist) or ""
         )
-        manifest.artifact_sha256["backend_review"] = (
-            file_sha256(layout.backend_review) or ""
-        )
+        manifest.artifact_sha256["backend_review"] = file_sha256(layout.backend_review) or ""
 
     def _persist_interruption(self) -> None:
         manifest = self.state.manifest

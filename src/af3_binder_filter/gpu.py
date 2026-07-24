@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-
 NVIDIA_SMI_QUERY = [
     "nvidia-smi",
     "--query-gpu=index,name,memory.used,memory.total",
@@ -57,14 +56,18 @@ def parse_nvidia_smi_csv(output: str) -> list[GPUInfo]:
                 )
             )
         except ValueError as exc:
-            raise GPUError(f"invalid nvidia-smi numeric field on line {line_number}: {line!r}") from exc
+            raise GPUError(
+                f"invalid nvidia-smi numeric field on line {line_number}: {line!r}"
+            ) from exc
     return gpus
 
 
 def query_gpus() -> list[GPUInfo]:
     """Query GPUs with nvidia-smi."""
 
-    result = subprocess.run(NVIDIA_SMI_QUERY, shell=False, check=False, text=True, capture_output=True)
+    result = subprocess.run(
+        NVIDIA_SMI_QUERY, shell=False, check=False, text=True, capture_output=True
+    )
     if result.returncode != 0:
         raise GPUError(f"nvidia-smi failed with code {result.returncode}: {result.stderr.strip()}")
     return parse_nvidia_smi_csv(result.stdout)
@@ -80,7 +83,10 @@ def select_free_gpus(
 
     allowed = set(allowed_gpu_ids) if allowed_gpu_ids is not None else None
     candidates = [gpu for gpu in gpus if allowed is None or gpu.index in allowed]
-    return sorted((gpu for gpu in candidates if gpu.is_free(threshold_mib)), key=lambda gpu: gpu.index)
+    return sorted(
+        (gpu for gpu in candidates if gpu.is_free(threshold_mib)),
+        key=lambda gpu: gpu.index,
+    )
 
 
 def shard_jobs(jobs: Sequence[Path], free_gpus: Sequence[GPUInfo]) -> list[Shard]:
@@ -96,4 +102,6 @@ def shard_jobs(jobs: Sequence[Path], free_gpus: Sequence[GPUInfo]) -> list[Shard
     shards = [list[Path]() for _ in selected_gpus]
     for index, job in enumerate(pending):
         shards[index % len(selected_gpus)].append(job)
-    return [Shard(gpu=gpu, jobs=tuple(shard)) for gpu, shard in zip(selected_gpus, shards, strict=True)]
+    return [
+        Shard(gpu=gpu, jobs=tuple(shard)) for gpu, shard in zip(selected_gpus, shards, strict=True)
+    ]

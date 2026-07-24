@@ -26,7 +26,6 @@ from af3_binder_filter.features import (
 from af3_binder_filter.io_utils import atomic_write_json, atomic_write_text
 from af3_binder_filter.jobs import file_asset_identity, sequence_sha256
 
-
 SECONDARY_FEATURE_MANIFEST_VERSION = 3
 
 
@@ -59,21 +58,16 @@ def secondary_feature_bundle_artifact_identity(
 
     template_ids: set[str] = set()
     if bundle.hmmsearch_a3m is not None and bundle.hmmsearch_a3m.is_file():
-        for line in bundle.hmmsearch_a3m.read_text(
-            encoding="utf-8", errors="ignore"
-        ).splitlines():
+        for line in bundle.hmmsearch_a3m.read_text(encoding="utf-8", errors="ignore").splitlines():
             if not line.startswith(">"):
                 continue
             identifier = line[1:].split()[0].split("/", 1)[0].lower()
             if identifier != "query" and len(identifier) >= 4:
                 template_ids.add(identifier[:4])
     template_paths = {
-        pdb_id: bundle.template_mmcif_dir / f"{pdb_id}.cif"
-        for pdb_id in sorted(template_ids)
+        pdb_id: bundle.template_mmcif_dir / f"{pdb_id}.cif" for pdb_id in sorted(template_ids)
     }
-    missing_templates = [
-        path for path in template_paths.values() if not path.is_file()
-    ]
+    missing_templates = [path for path in template_paths.values() if not path.is_file()]
     if missing_templates:
         raise FeatureError(
             "secondary template A3M references missing mmCIF files: "
@@ -82,10 +76,7 @@ def secondary_feature_bundle_artifact_identity(
     return {
         "non_pairing_a3m": file_asset_identity(bundle.non_pairing_a3m),
         "hmmsearch_a3m": file_asset_identity(bundle.hmmsearch_a3m),
-        "templates": {
-            pdb_id: file_asset_identity(path)
-            for pdb_id, path in template_paths.items()
-        },
+        "templates": {pdb_id: file_asset_identity(path) for pdb_id, path in template_paths.items()},
         "templates_enabled": bundle.templates_enabled,
         "template_count": bundle.template_count,
     }
@@ -131,9 +122,7 @@ def _template_chain_sequence(path: Path, maximum_index: int) -> tuple[str, str]:
         if len(sequence) > maximum_index:
             candidates.append((len(sequence), chain, sequence))
     if not candidates:
-        raise FeatureError(
-            f"no template chain in {path} covers template index {maximum_index}"
-        )
+        raise FeatureError(f"no template chain in {path} covers template index {maximum_index}")
     _length, chain_id, sequence = min(candidates, key=lambda item: item[0])
     return chain_id, sequence
 
@@ -190,16 +179,18 @@ def adapt_af3_features_for_secondary(
                 cache_dir=root,
                 non_pairing_a3m=target_msa,
                 pairing_a3m=None,
-                hmmsearch_a3m=(root / "templates.a3m") if payload.get("templates_enabled") else None,
+                hmmsearch_a3m=(root / "templates.a3m")
+                if payload.get("templates_enabled")
+                else None,
                 template_mmcif_dir=template_dir,
                 fingerprint=fingerprint,
                 templates_enabled=bool(payload.get("templates_enabled")),
                 template_count=int(payload.get("template_count", 0)),
             )
             result.validate()
-            if payload.get(
-                "artifact_identity"
-            ) != secondary_feature_bundle_artifact_identity(result):
+            if payload.get("artifact_identity") != secondary_feature_bundle_artifact_identity(
+                result
+            ):
                 raise FeatureError("secondary feature artifact identity mismatch")
             return result
         except Exception:
@@ -224,13 +215,9 @@ def adapt_af3_features_for_secondary(
             source = Path(str(template.get("mmcifPath") or ""))
             if not source.is_file():
                 raise FeatureError(f"template mmCIF does not exist: {source}")
-            chain_id, template_sequence = _template_chain_sequence(
-                source, max(template_indices)
-            )
+            chain_id, template_sequence = _template_chain_sequence(source, max(template_indices))
             aligned = np.full(len(normalized), "-", dtype="<U1")
-            for query_index, template_index in zip(
-                query_indices, template_indices, strict=True
-            ):
+            for query_index, template_index in zip(query_indices, template_indices, strict=True):
                 residue = template_sequence[template_index].upper()
                 aligned[query_index] = residue if residue.isalpha() else "X"
             pdb_id = _entry_id(source)
@@ -350,9 +337,9 @@ def adapt_local_features_for_secondary(
                 template_count=int(payload.get("template_count", 0)),
             )
             result.validate()
-            if payload.get(
-                "artifact_identity"
-            ) != secondary_feature_bundle_artifact_identity(result):
+            if payload.get("artifact_identity") != secondary_feature_bundle_artifact_identity(
+                result
+            ):
                 raise FeatureError("secondary feature artifact identity mismatch")
             return result
         except Exception:
@@ -361,9 +348,7 @@ def adapt_local_features_for_secondary(
     root.mkdir(parents=True, exist_ok=True)
     _atomic_copy(bundle.non_pairing_a3m, target_msa)
     source_records = _a3m_records_by_id(bundle.hmmsearch_a3m)
-    template_payload = json.loads(
-        bundle.af3_templates_json.read_text(encoding="utf-8")
-    )
+    template_payload = json.loads(bundle.af3_templates_json.read_text(encoding="utf-8"))
     selected_records: list[str] = []
     selected_templates: list[dict[str, str]] = []
     rejected: list[dict[str, Any]] = []

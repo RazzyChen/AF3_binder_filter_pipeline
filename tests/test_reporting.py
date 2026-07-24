@@ -5,8 +5,8 @@ from pathlib import Path
 
 from af3_binder_filter.output_layout import (
     OUTPUT_SCHEMA_VERSION,
-    RunOutputLayout,
     STAGE_DIRECTORIES,
+    RunOutputLayout,
 )
 from af3_binder_filter.reporting import (
     BACKEND_REVIEW_COLUMNS,
@@ -147,24 +147,16 @@ def test_decision_and_review_reports_have_v3_schemas_and_normalized_contacts(
     assert all_rows[0]["effective_backend"] == "opendde"
     assert all_rows[0]["effective_target_interface_residues"] == "T:2;T:3"
     assert all_rows[0]["effective_binder_interface_residues"] == "X:4;X:5"
-    assert all_rows[0]["effective_interface_residue_pairs"] == (
-        "T:2-X:4;T:3-X:5"
-    )
+    assert all_rows[0]["effective_interface_residue_pairs"] == ("T:2-X:4;T:3-X:5")
     assert all_rows[0]["configured_epitope_residues"] == "T:1;T:2;T:3"
-    assert all_rows[0]["diversity_cell_id"] == (
-        "binder_0001|complex_0001|epitope_0001"
-    )
+    assert all_rows[0]["diversity_cell_id"] == ("binder_0001|complex_0001|epitope_0001")
     assert all_rows[1]["effective_iptm"] == ""
     assert all_rows[1]["effective_pass"] == ""
 
     assert review_rows[0]["primary_target_interface_residues"] == "T:1;T:2"
     assert review_rows[0]["secondary_target_interface_residues"] == "T:2;T:3"
-    assert review_rows[0]["primary_interface_residue_pairs"] == (
-        "T:1-X:3;T:2-X:4"
-    )
-    assert review_rows[0]["secondary_interface_residue_pairs"] == (
-        "T:2-X:4;T:3-X:5"
-    )
+    assert review_rows[0]["primary_interface_residue_pairs"] == ("T:1-X:3;T:2-X:4")
+    assert review_rows[0]["secondary_interface_residue_pairs"] == ("T:2-X:4;T:3-X:5")
     assert review_rows[0]["consensus_interface_pair_jaccard"] == "0.25"
     assert review_rows[0]["esmfold_primary_binder_tm"] == "0.61"
     assert review_rows[0]["esmfold_secondary_binder_tm"] == "0.74"
@@ -185,9 +177,7 @@ def test_layout_creates_all_numbered_stage_folders(tmp_path: Path) -> None:
         "10_clustering",
     ]
     layout = RunOutputLayout(tmp_path).ensure()
-    assert {path.name for path in layout.stages_root.iterdir()} == set(
-        STAGE_DIRECTORIES.values()
-    )
+    assert {path.name for path in layout.stages_root.iterdir()} == set(STAGE_DIRECTORIES.values())
     for name in STAGE_DIRECTORIES:
         stage = layout.stage(name)
         assert stage.logs.is_dir()

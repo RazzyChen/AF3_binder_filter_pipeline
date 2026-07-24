@@ -10,13 +10,21 @@ from typing import (
     Iterable,
     Sequence,
 )
+
 from omegaconf import OmegaConf
+
 from af3_binder_filter.config import (
     AerithConfig,
     compose_hydra_config,
 )
 from af3_binder_filter.config_tools import resolve_docker_image_id
 from af3_binder_filter.features import _bundle as expected_feature_bundle
+from af3_binder_filter.gpu import (
+    GPUError,
+    GPUInfo,
+    query_gpus,
+    select_free_gpus,
+)
 from af3_binder_filter.io_utils import atomic_write_yaml
 from af3_binder_filter.jobs import (
     JobPlan,
@@ -29,23 +37,17 @@ from af3_binder_filter.jobs import (
     run_provenance,
     sequence_sha256,
 )
-from af3_binder_filter.gpu import (
-    GPUError,
-    GPUInfo,
-    query_gpus,
-    select_free_gpus,
-)
 from af3_binder_filter.manifest import (
     MANIFEST_VERSION,
     RunManifest,
     load_manifest,
 )
+from af3_binder_filter.orchestration.stage_registry import progress_stage_specs
 from af3_binder_filter.output_layout import (
     OUTPUT_SCHEMA_VERSION,
     RunOutputLayout,
 )
 from af3_binder_filter.progress import StageSpec
-from af3_binder_filter.orchestration.stage_registry import progress_stage_specs
 
 
 class PipelineExecutionError(RuntimeError):
@@ -112,13 +114,13 @@ def plan_gpu_job_shards(
     loads = [0] * len(selected)
     ordered = sorted(jobs, key=lambda job: (-estimate_job_cost(job), job.job_id))
     for job in ordered:
-        index = min(range(len(selected)), key=lambda value: (loads[value], selected[value].index))
+        index = min(
+            range(len(selected)),
+            key=lambda value: (loads[value], selected[value].index),
+        )
         buckets[index].append(job)
         loads[index] += estimate_job_cost(job)
-    return [
-        GpuJobShard(gpu, tuple(bucket))
-        for gpu, bucket in zip(selected, buckets, strict=True)
-    ]
+    return [GpuJobShard(gpu, tuple(bucket)) for gpu, bucket in zip(selected, buckets, strict=True)]
 
 
 def runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> list[GPUInfo]:
@@ -135,10 +137,7 @@ def runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> lis
                 ids = [gpu.index for gpu in query_gpus()]
             except GPUError:
                 ids = [0]
-        return [
-            GPUInfo(index, "dry-run", 0, 0)
-            for index in ids[:job_count]
-        ]
+        return [GPUInfo(index, "dry-run", 0, 0) for index in ids[:job_count]]
     try:
         free = select_free_gpus(
             query_gpus(),
@@ -146,15 +145,9 @@ def runtime_gpus(context: RunContext, *, job_count: int, stage_name: str) -> lis
             allowed_gpu_ids=allowed,
         )
     except GPUError as exc:
-        raise PipelineExecutionError(
-            f"{stage_name} cannot query available GPUs: {exc}"
-        ) from exc
+        raise PipelineExecutionError(f"{stage_name} cannot query available GPUs: {exc}") from exc
     if not free:
-        allowed_text = (
-            ",".join(str(index) for index in allowed)
-            if allowed is not None
-            else "all"
-        )
+        allowed_text = ",".join(str(index) for index in allowed) if allowed is not None else "all"
         raise PipelineExecutionError(
             f"{stage_name} has pending jobs but no free GPU is available "
             f"(allowed={allowed_text}, threshold="
@@ -222,16 +215,8 @@ def expected_feature_cache_dir(
     if config.backend.name == "alphafold3" and config.backend.target_data_json:
         digest = sequence_sha256(target_sequence)
         selected = fingerprint or af3_feature_fingerprint(config, target_sequence)
-        return (
-            Path(config.features.cache_dir).expanduser()
-            / digest
-            / "af3"
-            / selected[:16]
-        )
-    return (
-        Path(config.features.cache_dir).expanduser()
-        / sequence_sha256(target_sequence)
-    )
+        return Path(config.features.cache_dir).expanduser() / digest / "af3" / selected[:16]
+    return Path(config.features.cache_dir).expanduser() / sequence_sha256(target_sequence)
 
 
 def pipeline_stage_specs(config: AerithConfig) -> tuple[StageSpec, ...]:
@@ -266,8 +251,7 @@ def create_run_context(
         actual = inspected_images[image_key]
         if not actual:
             raise PipelineExecutionError(
-                f"cannot resolve the actual Docker image ID for {label}: "
-                f"{settings.image}"
+                f"cannot resolve the actual Docker image ID for {label}: {settings.image}"
             )
         if settings.image_id is not None and settings.image_id != actual:
             raise PipelineExecutionError(
@@ -323,12 +307,8 @@ def create_run_context(
         )
     plan = build_job_plan(config)
     provenance = run_provenance(plan, config)
-    feature_fingerprint = str(
-        provenance["feature_generation_identity_sha256"]
-    )
-    feature_database_release = provenance["scientific_config"]["features"].get(
-        "database_release"
-    )
+    feature_fingerprint = str(provenance["feature_generation_identity_sha256"])
+    feature_database_release = provenance["scientific_config"]["features"].get("database_release")
     fingerprint = run_fingerprint(
         plan,
         config,
@@ -347,9 +327,7 @@ def create_run_context(
         provenance=provenance,
         feature_fingerprint=feature_fingerprint,
         feature_database_identity=(
-            dict(feature_database_release)
-            if isinstance(feature_database_release, dict)
-            else None
+            dict(feature_database_release) if isinstance(feature_database_release, dict) else None
         ),
     )
     existing_manifest: RunManifest | None = None
@@ -378,18 +356,12 @@ def create_run_context(
                 verify_resolved_config=True,
             )
         elif not initialize_run:
-            raise PipelineExecutionError(
-                f"standalone run directory is empty: {results_dir}"
-            )
+            raise PipelineExecutionError(f"standalone run directory is empty: {results_dir}")
     elif not initialize_run:
-        raise PipelineExecutionError(
-            f"standalone run directory does not exist: {results_dir}"
-        )
+        raise PipelineExecutionError(f"standalone run directory does not exist: {results_dir}")
     if not initialize_run:
         if existing_manifest is None:
-            raise PipelineExecutionError(
-                f"standalone run has no validated manifest: {results_dir}"
-            )
+            raise PipelineExecutionError(f"standalone run has no validated manifest: {results_dir}")
         return context
     RunOutputLayout(results_dir).ensure()
     resolved_container = OmegaConf.to_container(resolved, resolve=True)
@@ -437,9 +409,7 @@ def _new_manifest(context: RunContext, feature_fingerprint: str) -> RunManifest:
         secondary_image_id=context.config.secondary_backend.image_id,
         feature_fingerprint=feature_fingerprint,
         source_csv_sha256=provenance.get("source_csv_sha256"),
-        resolved_config_sha256=file_sha256(
-            context.results_dir / "resolved_config.yaml"
-        ),
+        resolved_config_sha256=file_sha256(context.results_dir / "resolved_config.yaml"),
         provenance=provenance,
     )
 
@@ -470,9 +440,7 @@ def existing_or_new_manifest(
     payload = load_manifest(context.manifest_path)
     if payload is None:
         if context.manifest_path.exists():
-            raise PipelineExecutionError(
-                f"run manifest is invalid: {context.manifest_path}"
-            )
+            raise PipelineExecutionError(f"run manifest is invalid: {context.manifest_path}")
         return _new_manifest(context, feature_fingerprint)
     return _manifest_from_payload(
         context,
@@ -508,8 +476,7 @@ def _manifest_from_payload(
     def string_mapping(name: str) -> dict[str, str]:
         value = payload.get(name)
         if not isinstance(value, dict) or not all(
-            isinstance(key, str) and isinstance(item, str)
-            for key, item in value.items()
+            isinstance(key, str) and isinstance(item, str) for key, item in value.items()
         ):
             raise TypeError(f"{name} must be a string mapping")
         return dict(value)
@@ -525,15 +492,12 @@ def _manifest_from_payload(
         if not isinstance(provenance, dict):
             raise TypeError("provenance must be a mapping")
         if not isinstance(stage_status, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in stage_status.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in stage_status.items()
         ):
             raise TypeError("stage_status must be a string mapping")
         if not isinstance(gpu_assignments, dict):
             raise TypeError("gpu_assignments must be a mapping")
-        if not isinstance(errors, list) or not all(
-            isinstance(error, str) for error in errors
-        ):
+        if not isinstance(errors, list) or not all(isinstance(error, str) for error in errors):
             raise TypeError("errors must be a string list")
         manifest = RunManifest(
             run_id=string("run_id") or "",
@@ -548,9 +512,7 @@ def _manifest_from_payload(
             primary_image_id=string("primary_image_id", optional=True),
             secondary_image_id=string("secondary_image_id", optional=True),
             feature_fingerprint=string("feature_fingerprint", optional=True),
-            feature_content_sha256=string(
-                "feature_content_sha256", optional=True
-            ),
+            feature_content_sha256=string("feature_content_sha256", optional=True),
             source_csv_sha256=string("source_csv_sha256") or "",
             resolved_config_sha256=string("resolved_config_sha256") or "",
             provenance=provenance,
@@ -573,9 +535,7 @@ def _manifest_from_payload(
             raise TypeError("manifest version is invalid")
         if manifest.run_id != context.run_id:
             raise TypeError("manifest run_id does not match the run directory")
-        if manifest.target_sequence_sha256 != sequence_sha256(
-            context.plan.target_sequence
-        ):
+        if manifest.target_sequence_sha256 != sequence_sha256(context.plan.target_sequence):
             raise TypeError("target sequence identity does not match")
         expected_job_fingerprints = {
             job.job_id: job_fingerprint(
@@ -599,9 +559,7 @@ def _manifest_from_payload(
         expected_provenance = _context_provenance(context, feature_fingerprint)
         if manifest.provenance != expected_provenance:
             raise TypeError("stored provenance does not match the run fingerprint")
-        if manifest.source_csv_sha256 != expected_provenance.get(
-            "source_csv_sha256"
-        ):
+        if manifest.source_csv_sha256 != expected_provenance.get("source_csv_sha256"):
             raise TypeError("source CSV identity does not match")
         if manifest.primary_image_id != context.config.backend.image_id:
             raise TypeError("primary image identity does not match")
@@ -625,7 +583,5 @@ def _manifest_from_payload(
         ):
             raise TypeError("resolved_config.yaml does not match its manifest SHA256")
     except (KeyError, TypeError, ValueError) as exc:
-        raise PipelineExecutionError(
-            f"run manifest is invalid: {context.manifest_path}"
-        ) from exc
+        raise PipelineExecutionError(f"run manifest is invalid: {context.manifest_path}") from exc
     return manifest

@@ -11,6 +11,7 @@ from typing import (
     Any,
     Sequence,
 )
+
 from af3_binder_filter.backends import UnifiedPrediction
 from af3_binder_filter.interface import (
     analyze_interface_geometry,
@@ -18,12 +19,12 @@ from af3_binder_filter.interface import (
 )
 from af3_binder_filter.io_utils import atomic_write_csv
 from af3_binder_filter.jobs import JobSpec
+from af3_binder_filter.orchestration.context import RunContext
 from af3_binder_filter.orchestration.factories import create_interface_energy_engine
 from af3_binder_filter.progress import (
     NullProgressReporter,
     PipelineProgressReporter,
 )
-from af3_binder_filter.orchestration.context import RunContext
 
 
 def interface_stage(
@@ -112,6 +113,7 @@ def interface_stage(
             total=len(active_jobs),
             detail=eligibility,
         )
+
         def run_one(job_id: str, geometry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             pdb_value = geometry.get("rosetta_input_pdb")
             if not pdb_value:
@@ -205,9 +207,7 @@ def interface_stage(
     return ranked
 
 
-def interface_stage_failed(
-    rows: Sequence[dict[str, Any]], *, energy_engine: str
-) -> bool:
+def interface_stage_failed(rows: Sequence[dict[str, Any]], *, energy_engine: str) -> bool:
     """Propagate both geometry and configured energy-substage failures."""
 
     for row in rows:

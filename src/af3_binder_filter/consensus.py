@@ -32,24 +32,18 @@ def _ca_coordinate_map(array: Any, chain_id: str) -> dict[int, np.ndarray]:
         residue = chain[start:stop]
         position = int(residue.res_id[0])
         if position <= 0 or position in coordinates:
-            raise ValueError(
-                f"chain {chain_id!r} residue IDs must be unique positive positions"
-            )
+            raise ValueError(f"chain {chain_id!r} residue IDs must be unique positive positions")
         if "ins_code" in categories and any(
             str(value).strip() for value in residue.ins_code.tolist()
         ):
-            raise ValueError(
-                f"chain {chain_id!r} residue {position} has an insertion code"
-            )
+            raise ValueError(f"chain {chain_id!r} residue {position} has an insertion code")
         ca = residue[residue.atom_name == "CA"]
         coordinate = np.asarray(
             ca.coord[0] if len(ca) else residue.coord.mean(axis=0),
             dtype=float,
         )
         if coordinate.shape != (3,) or not np.all(np.isfinite(coordinate)):
-            raise ValueError(
-                f"chain {chain_id!r} residue {position} has invalid coordinates"
-            )
+            raise ValueError(f"chain {chain_id!r} residue {position} has invalid coordinates")
         coordinates[position] = coordinate
         ordered_positions.append(position)
     if ordered_positions != sorted(ordered_positions):
@@ -183,20 +177,14 @@ def _consensus_from_coordinate_maps(
         secondary[binder_chain],
     )
     if len(binder_primary) < 3:
-        raise ValueError(
-            f"only {len(binder_primary)} common binder residues are available"
-        )
+        raise ValueError(f"only {len(binder_primary)} common binder residues are available")
     aligned_binder_secondary = binder_secondary @ rotation + translation
 
-    common_binder_interface = (
-        primary_binder_contacts & secondary_binder_contacts
-    )
-    primary_interface, secondary_interface, _interface_positions = (
-        _paired_coordinate_arrays(
-            primary[binder_chain],
-            secondary[binder_chain],
-            common_binder_interface,
-        )
+    common_binder_interface = primary_binder_contacts & secondary_binder_contacts
+    primary_interface, secondary_interface, _interface_positions = _paired_coordinate_arrays(
+        primary[binder_chain],
+        secondary[binder_chain],
+        common_binder_interface,
     )
     secondary_interface = secondary_interface @ rotation + translation
 
@@ -204,9 +192,7 @@ def _consensus_from_coordinate_maps(
         binder_secondary,
         binder_primary,
     )
-    independent_aligned = (
-        binder_secondary @ independent_rotation + independent_translation
-    )
+    independent_aligned = binder_secondary @ independent_rotation + independent_translation
     independent_distances = np.linalg.norm(
         binder_primary - independent_aligned,
         axis=1,
@@ -248,12 +234,7 @@ def _consensus_from_coordinate_maps(
     if pair_deltas:
         values = np.asarray(pair_deltas)
         interface_lddt = float(
-            np.mean(
-                [
-                    (values < threshold).mean()
-                    for threshold in (0.5, 1.0, 2.0, 4.0)
-                ]
-            )
+            np.mean([(values < threshold).mean() for threshold in (0.5, 1.0, 2.0, 4.0)])
         )
     return {
         "consensus_status": "success",
@@ -272,10 +253,7 @@ def _consensus_from_coordinate_maps(
         ),
         "consensus_binder_center_displacement": (
             float(
-                np.linalg.norm(
-                    binder_primary.mean(axis=0)
-                    - aligned_binder_secondary.mean(axis=0)
-                )
+                np.linalg.norm(binder_primary.mean(axis=0) - aligned_binder_secondary.mean(axis=0))
             )
             if len(binder_primary)
             else None
@@ -457,22 +435,14 @@ def add_anomaly_flags(
                 and (_number(row.get("consensus_epitope_jaccard")) or 0.0)
                 < settings.explicit_different_epitope_jaccard
             )
-            pair_jaccard = _number(
-                row.get("consensus_interface_pair_jaccard")
-            )
+            pair_jaccard = _number(row.get("consensus_interface_pair_jaccard"))
             different_contact_pairs = (
                 pair_jaccard is not None
-                and pair_jaccard
-                < settings.explicit_different_interface_pair_jaccard
+                and pair_jaccard < settings.explicit_different_interface_pair_jaccard
             )
             fold_tm = _number(row.get("consensus_binder_fold_tm"))
-            fixed_frame_rmsd = _number(
-                row.get("consensus_binder_fixed_frame_rmsd")
-            )
-            different_fold = (
-                fold_tm is not None
-                and fold_tm < settings.same_fold_tm_threshold
-            )
+            fixed_frame_rmsd = _number(row.get("consensus_binder_fixed_frame_rmsd"))
+            different_fold = fold_tm is not None and fold_tm < settings.same_fold_tm_threshold
             different_pose = (
                 fixed_frame_rmsd is not None
                 and fixed_frame_rmsd > settings.different_pose_rmsd_threshold
@@ -525,7 +495,12 @@ def consensus_rows(
         for key, value in primary.items():
             row[f"primary_{key}"] = value
         if secondary is None:
-            row.update({"secondary_status": "not_selected", "consensus_status": "not_available"})
+            row.update(
+                {
+                    "secondary_status": "not_selected",
+                    "consensus_status": "not_available",
+                }
+            )
             merged.append(row)
             continue
         for key, value in secondary.items():
@@ -534,9 +509,7 @@ def consensus_rows(
         row["secondary_status"] = secondary.get("job_status")
         primary_contacts = parse_residue_set(primary.get("target_interface_residues"))
         secondary_contacts = parse_residue_set(secondary.get("target_interface_residues"))
-        row["consensus_epitope_disagreement"] = 1.0 - jaccard(
-            primary_contacts, secondary_contacts
-        )
+        row["consensus_epitope_disagreement"] = 1.0 - jaccard(primary_contacts, secondary_contacts)
         row["consensus_interface_pair_jaccard"] = _set_jaccard(
             _pair_set(primary.get("interface_residue_pairs")),
             _pair_set(secondary.get("interface_residue_pairs")),
@@ -550,7 +523,9 @@ def consensus_rows(
                 primary_target_contacts=primary_contacts,
                 secondary_target_contacts=secondary_contacts,
                 primary_binder_contacts=parse_residue_set(primary.get("binder_interface_residues")),
-                secondary_binder_contacts=parse_residue_set(secondary.get("binder_interface_residues")),
+                secondary_binder_contacts=parse_residue_set(
+                    secondary.get("binder_interface_residues")
+                ),
                 settings=settings,
             )
             row.update(metrics)

@@ -277,9 +277,9 @@ def test_large_database_identity_is_bounded_labelled_and_content_sensitive(
     original_stat = database.stat()
 
     original = scientific_config_identity(config)
-    member = original["features"]["database_release"]["mmseqs_prefixes"][
-        "entries"
-    ][0]["content_identity"]
+    member = original["features"]["database_release"]["mmseqs_prefixes"]["entries"][0][
+        "content_identity"
+    ]
     assert member["identity_mode"] == "bounded-content-sample-v1"
     assert member["sample_sha256"]
 

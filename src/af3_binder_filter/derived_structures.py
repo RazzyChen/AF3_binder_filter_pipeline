@@ -27,7 +27,6 @@ import numpy as np
 from af3_binder_filter.io_utils import atomic_write_csv, atomic_write_json
 from af3_binder_filter.residue_format import parse_residue_positions
 
-
 DERIVED_STRUCTURE_SCHEMA = "aerith.derived-structures.v2"
 _SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9_.-]+")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -240,28 +239,21 @@ def _validated_mapping(
             raise ValueError(f"chain {chain!r} has no mapped standard residues")
         positions = [int(record.sequence_position) for record in records]
         if len(positions) != len(set(positions)) or any(value <= 0 for value in positions):
-            raise ValueError(
-                f"chain {chain!r} must have unique positive sequence positions"
-            )
+            raise ValueError(f"chain {chain!r} must have unique positive sequence positions")
         expected = expected_by_chain[chain]
         for record in records:
             position = int(record.sequence_position)
             if position > len(expected):
-                raise ValueError(
-                    f"chain {chain!r} position {position} exceeds input sequence"
-                )
+                raise ValueError(f"chain {chain!r} position {position} exceeds input sequence")
             residue = _AA3_TO_1.get(str(record.res_name))
             if residue is None or expected[position - 1] != residue:
                 raise ValueError(
                     f"chain {chain!r} structure residue {record.res_name} at "
                     f"position {position} does not match input sequence"
                 )
-    mapping = canonical_residue_mapping(
-        tuple(target_records) + tuple(binder_records)
-    )
+    mapping = canonical_residue_mapping(tuple(target_records) + tuple(binder_records))
     if [row["pdb_chain"] for row in mapping] != (
-        [target_chain] * len(target_records)
-        + [binder_chain] * len(binder_records)
+        [target_chain] * len(target_records) + [binder_chain] * len(binder_records)
     ):
         raise ValueError("canonical mapping chain order is not target then binder")
     return mapping
@@ -293,12 +285,8 @@ def _identity_payload(
         "target_sequence_length": len(target_sequence.strip()),
         "binder_sequence_length": len(binder_sequence.strip()),
         "interface_distance_cutoff": float(interface_distance_cutoff),
-        "target_interface_positions": sorted(
-            {int(value) for value in target_interface_positions}
-        ),
-        "binder_interface_positions": sorted(
-            {int(value) for value in binder_interface_positions}
-        ),
+        "target_interface_positions": sorted({int(value) for value in target_interface_positions}),
+        "binder_interface_positions": sorted({int(value) for value in binder_interface_positions}),
         "residue_mapping": [dict(row) for row in residue_mapping],
     }
 
@@ -358,23 +346,15 @@ def _validate_mapping(identity: Mapping[str, Any]) -> list[dict[str, Any]] | Non
             identity.get("schema") != DERIVED_STRUCTURE_SCHEMA
             or not str(identity.get("job_id", ""))
             or not str(identity.get("backend", ""))
-            or _SHA256.fullmatch(str(identity.get("source_model_sha256", "")))
-            is None
-            or _SHA256.fullmatch(str(identity.get("target_sequence_sha256", "")))
-            is None
-            or _SHA256.fullmatch(str(identity.get("binder_sequence_sha256", "")))
-            is None
+            or _SHA256.fullmatch(str(identity.get("source_model_sha256", ""))) is None
+            or _SHA256.fullmatch(str(identity.get("target_sequence_sha256", ""))) is None
+            or _SHA256.fullmatch(str(identity.get("binder_sequence_sha256", ""))) is None
         ):
             return None
         target_length = int(identity.get("target_sequence_length", 0))
         binder_length = int(identity.get("binder_sequence_length", 0))
         distance = float(identity.get("interface_distance_cutoff"))
-        if (
-            target_length <= 0
-            or binder_length <= 0
-            or not np.isfinite(distance)
-            or distance <= 0
-        ):
+        if target_length <= 0 or binder_length <= 0 or not np.isfinite(distance) or distance <= 0:
             return None
         interface_by_key: dict[str, list[int]] = {}
         for key in (
@@ -383,14 +363,11 @@ def _validate_mapping(identity: Mapping[str, Any]) -> list[dict[str, Any]] | Non
         ):
             raw = identity.get(key)
             if not isinstance(raw, list) or any(
-                isinstance(value, bool) or not isinstance(value, int)
-                for value in raw
+                isinstance(value, bool) or not isinstance(value, int) for value in raw
             ):
                 return None
             positions = [int(value) for value in raw]
-            if positions != sorted(set(positions)) or any(
-                position <= 0 for position in positions
-            ):
+            if positions != sorted(set(positions)) or any(position <= 0 for position in positions):
                 return None
             interface_by_key[key] = positions
     except (TypeError, ValueError, OverflowError):
@@ -443,7 +420,8 @@ def _validate_mapping(identity: Mapping[str, Any]) -> list[dict[str, Any]] | Non
             {
                 field: (
                     int(item[field])
-                    if field in {
+                    if field
+                    in {
                         "pdb_residue_number",
                         "original_res_id",
                         "sequence_position",
@@ -457,9 +435,7 @@ def _validate_mapping(identity: Mapping[str, Any]) -> list[dict[str, Any]] | Non
         return None
     if not set(interface_by_key["target_interface_positions"]).issubset(
         seen[target_chain]
-    ) or not set(interface_by_key["binder_interface_positions"]).issubset(
-        seen[binder_chain]
-    ):
+    ) or not set(interface_by_key["binder_interface_positions"]).issubset(seen[binder_chain]):
         return None
     return normalized
 
@@ -509,20 +485,12 @@ def _validate_npz(path: Path, identity: Mapping[str, Any], mapping: list[dict[st
         binder_chain = str(identity["binder_chain"])
         if set(expected_chains) != {target_chain, binder_chain}:
             return False
-        target_interface = {
-            int(value) for value in identity["target_interface_positions"]
-        }
-        binder_interface = {
-            int(value) for value in identity["binder_interface_positions"]
-        }
+        target_interface = {int(value) for value in identity["target_interface_positions"]}
+        binder_interface = {int(value) for value in identity["binder_interface_positions"]}
         expected_interface = [
             (
                 int(item["sequence_position"])
-                in (
-                    target_interface
-                    if item["pdb_chain"] == target_chain
-                    else binder_interface
-                )
+                in (target_interface if item["pdb_chain"] == target_chain else binder_interface)
             )
             for item in mapping
         ]
@@ -580,14 +548,14 @@ def validate_derived_manifest(
             "binder_interface_positions",
             "residue_mapping",
         )
-        if any(
-            payload.get(key) != identity.get(key)
-            for key in duplicated_identity_fields
-        ):
+        if any(payload.get(key) != identity.get(key) for key in duplicated_identity_fields):
             return None
         expected_scalars = {
             "content_id": (actual_content_id, content_id),
-            "source_model_sha256": (identity.get("source_model_sha256"), source_model_sha256),
+            "source_model_sha256": (
+                identity.get("source_model_sha256"),
+                source_model_sha256,
+            ),
             "job_id": (identity.get("job_id"), job_id),
             "backend": (identity.get("backend"), backend),
             "target_chain": (identity.get("target_chain"), target_chain),
@@ -673,9 +641,7 @@ def _strict_row_positions(value: Any, expected_chain: str) -> frozenset[int]:
                 continue
             chain, _separator, _position = token.rpartition(":")
             if chain != expected_chain:
-                raise ValueError(
-                    f"residue {token!r} is not on expected chain {expected_chain!r}"
-                )
+                raise ValueError(f"residue {token!r} is not on expected chain {expected_chain!r}")
     positions = parse_residue_positions(value)
     if any(position <= 0 for position in positions):
         raise ValueError("interface positions must be positive")
@@ -730,9 +696,10 @@ def validated_artifacts_from_row(
     """
 
     def invalid() -> None:
-        if require_declared and str(
-            _row_value(row, prefix, "derived_structure_status") or ""
-        ) == "success":
+        if (
+            require_declared
+            and str(_row_value(row, prefix, "derived_structure_status") or "") == "success"
+        ):
             job_id = row_job_identifier(row) or "<unknown>"
             label = prefix or "backend"
             raise DerivedStructureValidationError(
@@ -755,9 +722,7 @@ def validated_artifacts_from_row(
             "derived_structure_manifest_path",
         )
         content_id = str(_row_value(row, prefix, "derived_structure_id") or "")
-        source_sha = str(
-            _row_value(row, prefix, "derived_source_model_sha256") or ""
-        )
+        source_sha = str(_row_value(row, prefix, "derived_source_model_sha256") or "")
         distance = _row_value(row, prefix, "derived_interface_distance_cutoff")
         if not all(
             (
@@ -1017,18 +982,12 @@ def materialize_derived_structures(
         binder_sequence=binder_sequence,
     )
     mapped_target = {
-        int(row["sequence_position"])
-        for row in mapping
-        if row["pdb_chain"] == target_chain
+        int(row["sequence_position"]) for row in mapping if row["pdb_chain"] == target_chain
     }
     mapped_binder = {
-        int(row["sequence_position"])
-        for row in mapping
-        if row["pdb_chain"] == binder_chain
+        int(row["sequence_position"]) for row in mapping if row["pdb_chain"] == binder_chain
     }
-    if not target_positions.issubset(mapped_target) or not binder_positions.issubset(
-        mapped_binder
-    ):
+    if not target_positions.issubset(mapped_target) or not binder_positions.issubset(mapped_binder):
         raise ValueError("interface positions are not present in canonical mapping")
     identity = _identity_payload(
         source_model_sha256=source_sha,
@@ -1044,11 +1003,7 @@ def materialize_derived_structures(
         residue_mapping=mapping,
     )
     content_id = derived_content_id(identity)
-    parent = (
-        artifacts_root
-        / _safe_component(backend)
-        / _safe_component(job_id)
-    )
+    parent = artifacts_root / _safe_component(backend) / _safe_component(job_id)
     parent.mkdir(parents=True, exist_ok=True)
     root = parent / content_id
     lock_path = parent / f".{content_id}.lock"
@@ -1083,9 +1038,7 @@ def materialize_derived_structures(
             )
             return cached
 
-        temporary_parent = Path(
-            tempfile.mkdtemp(prefix=f".{content_id}.building-", dir=parent)
-        )
+        temporary_parent = Path(tempfile.mkdtemp(prefix=f".{content_id}.building-", dir=parent))
         temporary_root = temporary_parent / "bundle"
         try:
             _write_bundle(
@@ -1118,9 +1071,7 @@ def materialize_derived_structures(
                 residue_mapping=mapping,
             )
             if built is None:
-                raise RuntimeError(
-                    f"failed to validate derived structure build {temporary_root}"
-                )
+                raise RuntimeError(f"failed to validate derived structure build {temporary_root}")
             if root.exists():
                 shutil.rmtree(root)
             os.replace(temporary_root, root)

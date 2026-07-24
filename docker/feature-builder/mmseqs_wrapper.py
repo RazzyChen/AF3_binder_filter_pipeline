@@ -11,11 +11,7 @@ import sys
 def main() -> int:
     real_binary = os.environ.get("AERITH_MMSEQS_BINARY", "mmseqs")
     arguments = list(sys.argv[1:])
-    if (
-        arguments
-        and arguments[0] == "search"
-        and "--split-memory-limit" not in arguments
-    ):
+    if arguments and arguments[0] == "search" and "--split-memory-limit" not in arguments:
         arguments.extend(
             [
                 "--split-memory-limit",

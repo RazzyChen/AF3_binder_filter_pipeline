@@ -175,7 +175,9 @@ def test_keyboard_interrupt_terminates_process_group_and_closes_logs(
     assert executor.active_process_count == 0
 
 
-def test_dry_run_writes_only_command_record_and_never_starts_process(tmp_path: Path) -> None:
+def test_dry_run_writes_only_command_record_and_never_starts_process(
+    tmp_path: Path,
+) -> None:
     def forbidden_popen(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:
         raise AssertionError("dry-run must not start a subprocess")
 
@@ -214,7 +216,9 @@ def test_start_error_never_leaks_registry_entry(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
-def test_cancel_all_reaps_two_concurrent_commands_and_closes_logs(tmp_path: Path) -> None:
+def test_cancel_all_reaps_two_concurrent_commands_and_closes_logs(
+    tmp_path: Path,
+) -> None:
     executor = LocalCommandExecutor(termination_grace_seconds=0.2)
     commands = tuple(
         _spec(
@@ -470,7 +474,9 @@ def test_docker_cancel_cleanup_is_named_bounded_and_concurrently_idempotent(
     assert len(cleanup_calls) == 2
 
 
-def test_stage_runner_reports_partial_and_preserves_command_order(tmp_path: Path) -> None:
+def test_stage_runner_reports_partial_and_preserves_command_order(
+    tmp_path: Path,
+) -> None:
     events: list[ExecutionEvent] = []
     commands = (
         _spec(tmp_path, (sys.executable, "-c", "pass"), name="success"),

@@ -14,6 +14,7 @@ from typing import (
     Callable,
     Sequence,
 )
+
 from af3_binder_filter.execution import (
     CommandSpec,
     LocalCommandExecutor,
@@ -144,8 +145,7 @@ def run_sharded_commands(
                 except Exception as exc:
                     return_codes[shard.gpu.index] = None
                     errors_by_gpu[shard.gpu.index] = (
-                        f"{stage_name} GPU {shard.gpu.index} raised "
-                        f"{type(exc).__name__}: {exc}"
+                        f"{stage_name} GPU {shard.gpu.index} raised {type(exc).__name__}: {exc}"
                     )
                 else:
                     return_codes[shard.gpu.index] = outcome.returncode
@@ -204,11 +204,7 @@ def small_json_is_complete(path: Path) -> bool:
 
 
 def path_belongs_to_job(path: Path, job_id: str) -> bool:
-    return (
-        job_id in path.parts
-        or path.stem == job_id
-        or path.stem.startswith(f"{job_id}_")
-    )
+    return job_id in path.parts or path.stem == job_id or path.stem.startswith(f"{job_id}_")
 
 
 def stable_completion_probe(

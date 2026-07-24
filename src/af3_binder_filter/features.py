@@ -24,7 +24,6 @@ from af3_binder_filter.jobs import (
     sequence_sha256,
 )
 
-
 FEATURE_MANIFEST_VERSION = 3
 
 
@@ -149,13 +148,9 @@ class FeatureBundle:
             if not path.is_file() or path.stat().st_size == 0:
                 raise FeatureError(f"feature output is missing or empty: {path}")
         if not self.af3_templates_json.is_file():
-            raise FeatureError(
-                f"AF3 template manifest is missing: {self.af3_templates_json}"
-            )
+            raise FeatureError(f"AF3 template manifest is missing: {self.af3_templates_json}")
         if not self.template_mmcif_dir.is_dir():
-            raise FeatureError(
-                f"AF3 template directory is missing: {self.template_mmcif_dir}"
-            )
+            raise FeatureError(f"AF3 template directory is missing: {self.template_mmcif_dir}")
         try:
             payload = json.loads(self.af3_templates_json.read_text(encoding="utf-8"))
             if (
@@ -164,8 +159,7 @@ class FeatureBundle:
                 and not self.source_mmcif_dir.is_dir()
             ):
                 raise FeatureError(
-                    "source template mmCIF directory is missing: "
-                    f"{self.source_mmcif_dir}"
+                    f"source template mmCIF directory is missing: {self.source_mmcif_dir}"
                 )
             for template in payload.get("templates", []):
                 filename = Path(str(template["mmcifFile"])).name
@@ -174,9 +168,7 @@ class FeatureBundle:
                 query_indices = template.get("queryIndices") or []
                 template_indices = template.get("templateIndices") or []
                 if not query_indices or len(query_indices) != len(template_indices):
-                    raise FeatureError(
-                        f"AF3 template has an invalid residue mapping: {filename}"
-                    )
+                    raise FeatureError(f"AF3 template has an invalid residue mapping: {filename}")
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise FeatureError(
                 f"AF3 template manifest is invalid: {self.af3_templates_json}: {exc}"
@@ -188,15 +180,10 @@ class FeatureBundle:
         return [
             {
                 "mmcifPath": str(
-                    (
-                        self.template_mmcif_dir
-                        / Path(str(template["mmcifFile"])).name
-                    ).resolve()
+                    (self.template_mmcif_dir / Path(str(template["mmcifFile"])).name).resolve()
                 ),
                 "queryIndices": [int(value) for value in template["queryIndices"]],
-                "templateIndices": [
-                    int(value) for value in template["templateIndices"]
-                ],
+                "templateIndices": [int(value) for value in template["templateIndices"]],
             }
             for template in payload.get("templates", [])
         ]
@@ -214,9 +201,7 @@ class AF3FeatureBundle:
 
     def validate(self) -> None:
         if not self.target_data_json.is_file():
-            raise FeatureError(
-                f"AF3 target data JSON is missing: {self.target_data_json}"
-            )
+            raise FeatureError(f"AF3 target data JSON is missing: {self.target_data_json}")
         if not self.features.unpaired_msa_path:
             raise FeatureError("AF3 target data has no unpaired target MSA")
         for value in (
@@ -286,9 +271,7 @@ def _bundle(
         fingerprint=fingerprint,
         af3_templates_json=root / "af3_templates.json",
         template_mmcif_dir=root / "templates",
-        source_mmcif_dir=(
-            Path(settings.database_dir).expanduser().resolve() / "mmcif_files"
-        ),
+        source_mmcif_dir=(Path(settings.database_dir).expanduser().resolve() / "mmcif_files"),
     )
 
 
@@ -313,9 +296,7 @@ def cached_target_features(
         ):
             return None
         bundle.validate()
-        if manifest.get("artifact_identities") != feature_bundle_artifact_identity(
-            bundle
-        ):
+        if manifest.get("artifact_identities") != feature_bundle_artifact_identity(bundle):
             return None
         # The query must be the first sequence in both MSA files.
         expected_query = "".join(target_sequence.split()).upper()
@@ -418,14 +399,16 @@ def prepare_target_features(
     _lock_acquired: bool = False,
 ) -> FeaturePreparation:
     selected_database_identity = (
-        database_identity
-        if database_identity is not None
-        else feature_database_identity(settings)
+        database_identity if database_identity is not None else feature_database_identity(settings)
     )
-    cached = None if force else cached_target_features(
-        settings,
-        target_sequence,
-        database_identity=selected_database_identity,
+    cached = (
+        None
+        if force
+        else cached_target_features(
+            settings,
+            target_sequence,
+            database_identity=selected_database_identity,
+        )
     )
     if cached is not None:
         return FeaturePreparation(cached, None, reused=True)
@@ -468,9 +451,7 @@ def prepare_target_features(
             )
         return FeaturePreparation(None, tuple(command), reused=False)
 
-    build_dir = Path(
-        tempfile.mkdtemp(prefix=".feature-build-", dir=bundle.cache_dir)
-    )
+    build_dir = Path(tempfile.mkdtemp(prefix=".feature-build-", dir=bundle.cache_dir))
     command, _query_fasta = build_feature_builder_command(
         settings,
         target_sequence=target_sequence,
@@ -508,9 +489,7 @@ def prepare_target_features(
                 else ""
             )
             if outcome.error is not None:
-                raise FeatureError(
-                    f"feature-builder execution failed: {outcome.error}"
-                )
+                raise FeatureError(f"feature-builder execution failed: {outcome.error}")
         else:
             try:
                 completed = runner(
@@ -535,8 +514,7 @@ def prepare_target_features(
                 )
         if returncode != 0:
             raise FeatureError(
-                f"feature-builder failed with return code {returncode}: "
-                f"{stderr_text.strip()}"
+                f"feature-builder failed with return code {returncode}: {stderr_text.strip()}"
             )
         built_paths = {
             bundle.pairing_a3m: build_dir / "pairing.a3m",
@@ -555,9 +533,7 @@ def prepare_target_features(
                 source,
                 "".join(target_sequence.split()).upper(),
             ):
-                raise FeatureError(
-                    f"feature-builder output query does not match target: {source}"
-                )
+                raise FeatureError(f"feature-builder output query does not match target: {source}")
         for destination, source in built_paths.items():
             if not source.is_file() or source.stat().st_size == 0:
                 raise FeatureError(f"feature-builder output is missing or empty: {source}")
@@ -594,9 +570,7 @@ def prepare_target_features(
             "template_database": settings.template_database,
             "use_environment_database": settings.use_environment_database,
             "artifacts": {
-                key: str(value)
-                for key, value in asdict(bundle).items()
-                if isinstance(value, Path)
+                key: str(value) for key, value in asdict(bundle).items() if isinstance(value, Path)
             },
             "artifact_identities": feature_bundle_artifact_identity(bundle),
         },

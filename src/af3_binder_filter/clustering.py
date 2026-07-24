@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import math
 import os
 import shutil
@@ -393,9 +392,7 @@ def select_quality_representatives(
     return {
         cluster_id: min(
             job_ids,
-            key=lambda job_id: quality_key(
-                rows_by_job.get(job_id, {"job_name": job_id})
-            ),
+            key=lambda job_id: quality_key(rows_by_job.get(job_id, {"job_name": job_id})),
         )
         for cluster_id, job_ids in members.items()
     }
@@ -460,16 +457,16 @@ def write_cluster_outputs(
         text = "cluster_id\trepresentative\tmember\n"
         text += "".join(
             f"{cluster_id}\t{raw.get(cluster_id, '')}\t{job_id}\n"
-            for job_id, cluster_id in sorted(membership.items(), key=lambda item: (item[1], item[0]))
+            for job_id, cluster_id in sorted(
+                membership.items(), key=lambda item: (item[1], item[0])
+            )
         )
         atomic_write_text(artifact_root / name, text)
 
     write_tsv("binder_clusters.tsv", binder_membership, binder_raw_representatives)
     write_tsv("complex_clusters.tsv", complex_membership, complex_raw_representatives)
     write_tsv("epitope_clusters.tsv", epitope_membership, epitope_raw_representatives)
-    complex_report = [
-        row for row in representative_rows if row["layer"] == "complex"
-    ]
+    complex_report = [row for row in representative_rows if row["layer"] == "complex"]
     text = "cluster_id\tmember_count\tfoldseek_representative\tquality_representative\n"
     text += "".join(
         f"{row['cluster_id']}\t{row['member_count']}\t"

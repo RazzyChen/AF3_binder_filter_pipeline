@@ -9,7 +9,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docker" / "runtime" / "locks"
 
@@ -53,9 +52,7 @@ def pypi_packages(environment: str, *, excluded: set[str]) -> list[str]:
 
 
 def uv_packages(python: Path, *, excluded: set[str]) -> list[str]:
-    packages = json.loads(
-        command("uv", "pip", "list", "--python", str(python), "--format", "json")
-    )
+    packages = json.loads(command("uv", "pip", "list", "--python", str(python), "--format", "json"))
     return sorted(
         f"{item['name']}=={item['version']}"
         for item in packages

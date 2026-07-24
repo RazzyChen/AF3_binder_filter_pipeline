@@ -135,7 +135,11 @@ def write_af3_input(payload: Any, output_path: Path, *, force: bool = False) -> 
 
     if output_path.exists() and not force:
         return output_path
-    data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
+    data = (
+        payload.model_dump(mode="json", exclude_none=True)
+        if hasattr(payload, "model_dump")
+        else payload
+    )
     atomic_write_json(output_path, data)
     return output_path
 
@@ -182,7 +186,9 @@ def write_complex_inputs(
             binder_chain=binder_chain,
             seed=seed,
         )
-        written.append(write_af3_input(payload, output_dir / f"{payload['name']}.json", force=force))
+        written.append(
+            write_af3_input(payload, output_dir / f"{payload['name']}.json", force=force)
+        )
     if clean_stale:
         current_paths = set(written)
         for old_json in output_dir.glob("*.json"):
@@ -207,7 +213,9 @@ def get_chain_sequence(payload: dict[str, Any], chain_id: str) -> str:
     raise KeyError(f"chain {chain_id!r} not found in AF3 input {payload.get('name', '<unknown>')}")
 
 
-def copy_relative_file(source: Path, destination_root: Path, relative_path: str, *, force: bool) -> str:
+def copy_relative_file(
+    source: Path, destination_root: Path, relative_path: str, *, force: bool
+) -> str:
     """Copy a source file under destination_root/relative_path and return the relative path."""
 
     destination = destination_root / relative_path

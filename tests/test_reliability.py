@@ -3,13 +3,14 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import af3_binder_filter.orchestration.feature_identity as feature_identity_workflow
+import pytest
+from typer.testing import CliRunner
+
 import af3_binder_filter.orchestration.context as workflow_context
+import af3_binder_filter.orchestration.feature_identity as feature_identity_workflow
 import af3_binder_filter.orchestration.pipeline as pipeline_workflow
 import af3_binder_filter.orchestration.prediction_stage as prediction_workflow
 import af3_binder_filter.orchestration.resume as resume_workflow
-import pytest
-from typer.testing import CliRunner
 from af3_binder_filter.backends import UnifiedPrediction
 from af3_binder_filter.cli import app
 from af3_binder_filter.config import AerithConfig, BackendSettings
@@ -56,9 +57,7 @@ def test_backend_job_fingerprint_uses_actual_backend_feature_bundle() -> None:
     second = backend_job_fingerprint(context, job, "secondary-features-b", backend)
 
     assert first != second
-    assert first == backend_job_fingerprint(
-        context, job, "secondary-features-a", backend
-    )
+    assert first == backend_job_fingerprint(context, job, "secondary-features-a", backend)
 
 
 def test_backend_job_fingerprint_uses_actual_checkpoint(tmp_path) -> None:
@@ -87,20 +86,14 @@ def test_backend_job_fingerprint_uses_actual_checkpoint(tmp_path) -> None:
         "opendde",
         "opendde_v1",
     )
-    original = backend_job_fingerprint(
-        context, job, "secondary-features", backend
-    )
+    original = backend_job_fingerprint(context, job, "secondary-features", backend)
 
     backend.checkpoint_path = str(abag)
 
-    assert original != backend_job_fingerprint(
-        context, job, "secondary-features", backend
-    )
+    assert original != backend_job_fingerprint(context, job, "secondary-features", backend)
 
 
-def test_matching_secondary_job_manifest_has_no_pending_job(
-    tmp_path, monkeypatch
-) -> None:
+def test_matching_secondary_job_manifest_has_no_pending_job(tmp_path, monkeypatch) -> None:
     context = SimpleNamespace(config=AerithConfig())
     backend = BackendSettings(
         name="opendde",
@@ -142,9 +135,7 @@ def test_matching_secondary_job_manifest_has_no_pending_job(
         lambda *_args: True,
     )
     output_root = tmp_path / "outputs"
-    fingerprint = backend_job_fingerprint(
-        context, job, "secondary-features", backend
-    )
+    fingerprint = backend_job_fingerprint(context, job, "secondary-features", backend)
     write_job_manifest(
         output_root / job.job_id,
         job=job,
@@ -262,9 +253,7 @@ def test_changed_feature_bytes_invalidate_prediction_with_same_generation_key(
     assert pending == [job]
 
 
-def test_standalone_loader_accepts_prediction_stage_fingerprint(
-    tmp_path, monkeypatch
-) -> None:
+def test_standalone_loader_accepts_prediction_stage_fingerprint(tmp_path, monkeypatch) -> None:
     config = AerithConfig()
     config.backend.image_id = "sha256:image"
     config.project.output_dir = str(tmp_path / "outputs")
@@ -362,10 +351,7 @@ def test_secondary_gate_allows_af3_structure_rescue_but_not_stale_metrics() -> N
 
 def _run_config(tmp_path: Path) -> Path:
     csv_path = tmp_path / "input.csv"
-    csv_path.write_text(
-        "sample_no,run_name,binder_sequence,target_seq\n"
-        "1,run,ACDE,LMNP\n"
-    )
+    csv_path.write_text("sample_no,run_name,binder_sequence,target_seq\n1,run,ACDE,LMNP\n")
     return write_initial_config(
         tmp_path / "config.yaml",
         EnvironmentDetection(),
@@ -498,9 +484,7 @@ def test_standalone_cluster_rejects_tampered_candidate_artifact(
     model.write_text("data_secondary\n")
     manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context.expected_feature_fingerprint(
-            context.config, context.plan.target_sequence
-        ),
+        workflow_context.expected_feature_fingerprint(context.config, context.plan.target_sequence),
     )
     resume_workflow.persist_clustering_inputs(
         context,
@@ -630,9 +614,7 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
     model.write_text("data_effective\n")
     manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context.expected_feature_fingerprint(
-            context.config, context.plan.target_sequence
-        ),
+        workflow_context.expected_feature_fingerprint(context.config, context.plan.target_sequence),
     )
     resume_workflow.persist_clustering_inputs(
         context,
@@ -651,15 +633,11 @@ def test_clustering_input_preserves_post_esm_fields_and_binds_effective_model(
         manifest,
     )
 
-    all_rows, candidate_rows = resume_workflow.validated_clustering_inputs(
-        context, manifest
-    )
+    all_rows, candidate_rows = resume_workflow.validated_clustering_inputs(context, manifest)
 
     assert all_rows[0]["esm_if_perplexity"] == "3.25"
     assert candidate_rows[0]["effective_backend"] == "opendde"
-    assert manifest.effective_model_sha256[context.plan.jobs[0].job_id] == file_sha256(
-        model
-    )
+    assert manifest.effective_model_sha256[context.plan.jobs[0].job_id] == file_sha256(model)
 
 
 def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mutation(
@@ -675,9 +653,7 @@ def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mut
     model.write_text("data_before\n")
     manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context.expected_feature_fingerprint(
-            context.config, context.plan.target_sequence
-        ),
+        workflow_context.expected_feature_fingerprint(context.config, context.plan.target_sequence),
     )
     resume_workflow.persist_clustering_inputs(
         context,
@@ -701,9 +677,7 @@ def test_standalone_cluster_rejects_changed_effective_model_without_manifest_mut
     assert context.manifest_path.read_bytes() == original_manifest
 
 
-def test_pipeline_resume_preserves_existing_manifest_artifacts(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_pipeline_resume_preserves_existing_manifest_artifacts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
@@ -720,9 +694,7 @@ def test_pipeline_resume_preserves_existing_manifest_artifacts(
     assert resumed["artifact_sha256"]["resume_sentinel"] == "abc123"
 
 
-def test_prepared_feature_content_is_bound_to_run_manifest(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_prepared_feature_content_is_bound_to_run_manifest(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(workflow_context, "resolve_docker_image_id", _stable_image_id)
     context = create_run_context(
         _run_config(tmp_path),
@@ -757,9 +729,7 @@ def test_prepared_feature_content_is_bound_to_run_manifest(
     )
     manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context.expected_feature_fingerprint(
-            context.config, context.plan.target_sequence
-        ),
+        workflow_context.expected_feature_fingerprint(context.config, context.plan.target_sequence),
     )
 
     first = feature_identity_workflow.bind_feature_content(manifest, bundle)
@@ -784,9 +754,7 @@ def test_standalone_cluster_rejects_wrong_job_membership_without_mutation(
     model.write_text("data_effective\n")
     manifest = workflow_context.existing_or_new_manifest(
         context,
-        workflow_context.expected_feature_fingerprint(
-            context.config, context.plan.target_sequence
-        ),
+        workflow_context.expected_feature_fingerprint(context.config, context.plan.target_sequence),
     )
     resume_workflow.persist_clustering_inputs(
         context,
@@ -816,9 +784,7 @@ def test_standalone_cluster_rejects_wrong_job_membership_without_mutation(
     assert context.manifest_path.read_bytes() == original_manifest
 
 
-def test_cluster_cli_requests_read_only_existing_run_context(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_cluster_cli_requests_read_only_existing_run_context(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
     config = AerithConfig()
     context = SimpleNamespace(
@@ -839,9 +805,7 @@ def test_cluster_cli_requests_read_only_existing_run_context(
     assert captured["initialize_run"] is False
 
 
-def test_cluster_cli_failure_does_not_claim_fake_singletons(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_cluster_cli_failure_does_not_claim_fake_singletons(tmp_path: Path, monkeypatch) -> None:
     context = SimpleNamespace(
         config=AerithConfig(),
         results_dir=tmp_path / "results" / "run",

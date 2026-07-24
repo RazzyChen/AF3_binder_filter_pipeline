@@ -42,10 +42,7 @@ def _database(root: Path) -> Path:
 
 
 def _csv(path: Path) -> Path:
-    path.write_text(
-        "sample_no,run_name,binder_sequence,target_seq\n"
-        "1,run,ACDE,LMNP\n"
-    )
+    path.write_text("sample_no,run_name,binder_sequence,target_seq\n1,run,ACDE,LMNP\n")
     return path
 
 
@@ -173,9 +170,7 @@ def test_missing_configured_rosetta_is_an_error(tmp_path: Path) -> None:
     database = _database(tmp_path / "database")
     config.features.database_dir = str(database)
     config.features.mmseqs_dir = str(database / "mmseqs")
-    config.features.pdb_seqres_fasta = str(
-        database / "pdb_seqres_2022_09_28.fasta"
-    )
+    config.features.pdb_seqres_fasta = str(database / "pdb_seqres_2022_09_28.fasta")
     config.features.mmcif_dir = str(database / "mmcif_files")
     config.interface.rosetta.binary = str(tmp_path / "missing_rosetta")
     config.interface.rosetta.database = str(tmp_path / "missing_rosetta_database")
@@ -297,7 +292,9 @@ def test_structured_config_rejects_wrong_type(tmp_path: Path) -> None:
         tmp_path / "config.yaml",
         EnvironmentDetection(),
     )
-    text = config_path.read_text().replace("epitope_residues: null", "epitope_residues: null\n  distance: wrong")
+    text = config_path.read_text().replace(
+        "epitope_residues: null", "epitope_residues: null\n  distance: wrong"
+    )
     config_path.write_text(text)
 
     with pytest.raises(ConfigError, match="invalid Hydra configuration"):
@@ -328,11 +325,7 @@ def test_dry_run_resolved_config_matches_manifest_backend(tmp_path: Path) -> Non
     manifest = json.loads(context.manifest_path.read_text())
     resolved = (context.results_dir / "resolved_config.yaml").read_text()
     command = (
-        context.results_dir
-        / "stages"
-        / "02_features"
-        / "logs"
-        / "prepare_features.command.txt"
+        context.results_dir / "stages" / "02_features" / "logs" / "prepare_features.command.txt"
     ).read_text()
     assert manifest["backend"] == "alphafold3"
     assert manifest["fingerprint"] == context.fingerprint
@@ -417,8 +410,12 @@ def test_af3_external_target_data_is_externalized_into_complex_inputs(
 
     assert run_pipeline(context) == []
 
-    input_path = work_dir / context.run_id / "inputs" / "alphafold3" / (
-        "sample_1_binder_candiate_complex_pred.json"
+    input_path = (
+        work_dir
+        / context.run_id
+        / "inputs"
+        / "alphafold3"
+        / ("sample_1_binder_candiate_complex_pred.json")
     )
     payload = json.loads(input_path.read_text())
     target = payload["sequences"][0]["protein"]
@@ -450,23 +447,13 @@ def test_af3_dry_run_plans_gpu_mmseqs_preprocessing_first(tmp_path: Path) -> Non
     assert run_pipeline(context) == []
 
     feature_command = (
-        context.results_dir
-        / "stages"
-        / "02_features"
-        / "logs"
-        / "prepare_features.command.txt"
+        context.results_dir / "stages" / "02_features" / "logs" / "prepare_features.command.txt"
     ).read_text()
     prediction_command = (
-        context.results_dir
-        / "stages"
-        / "03_primary_prediction"
-        / "logs"
-        / "prediction.command.txt"
+        context.results_dir / "stages" / "03_primary_prediction" / "logs" / "prediction.command.txt"
     ).read_text()
     assert context.config.features.image.startswith("sha256:")
-    assert (
-        f" {context.config.features.image} prepare-features " in feature_command
-    )
+    assert f" {context.config.features.image} prepare-features " in feature_command
     assert " aerith/fold-runtime:local prepare-features " not in feature_command
     assert "--use-gpu 1" in feature_command
     assert "--name aerith-" in feature_command
