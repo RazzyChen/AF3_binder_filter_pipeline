@@ -623,6 +623,29 @@ def _validated_runtime_source_heads(
     return heads, worktree_statuses
 
 
+def _validate_verified_bundle_source_heads(
+    config: AerithConfig,
+    bundle: RuntimeSourceBundle,
+) -> None:
+    """Require release bundle Git heads to match the configured model revisions."""
+
+    contexts = bundle.manifest.get("contexts")
+    if not isinstance(contexts, dict):
+        raise BackendError("runtime source bundle contexts are invalid")
+    expected_commits = {
+        "opendde-src": config.runtime.opendde_source_commit,
+        "esm-src": config.runtime.esm_source_commit,
+    }
+    for name, expected in expected_commits.items():
+        declared = contexts.get(name)
+        actual = declared.get("source_git_commit") if isinstance(declared, dict) else None
+        if actual != expected:
+            raise BackendError(
+                f"runtime source bundle context {name} commit mismatch: "
+                f"expected {expected}, found {actual or 'unavailable'}"
+            )
+
+
 def _update_hash_field(digest: Any, value: str | bytes) -> None:
     encoded = value.encode("utf-8") if isinstance(value, str) else value
     digest.update(len(encoded).to_bytes(8, byteorder="big"))
@@ -892,6 +915,7 @@ def build_runtime_image_command(
     verified_bundle: RuntimeSourceBundle | None = None
     if source_bundle is not None:
         verified_bundle = verify_runtime_source_bundle(source_bundle)
+        _validate_verified_bundle_source_heads(config, verified_bundle)
         sources = verified_bundle.context_paths
     elif context_root is None:
         sources = _runtime_source_paths(config)
@@ -900,6 +924,7 @@ def build_runtime_image_command(
         resolved_context_root = context_root.expanduser().resolve()
         if (resolved_context_root / RUNTIME_SOURCE_BUNDLE_MANIFEST).is_file():
             verified_bundle = verify_runtime_source_bundle(resolved_context_root)
+            _validate_verified_bundle_source_heads(config, verified_bundle)
             sources = verified_bundle.context_paths
         else:
             sources = {name: resolved_context_root / name for name in RUNTIME_SOURCE_CONTEXTS}

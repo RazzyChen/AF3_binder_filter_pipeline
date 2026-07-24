@@ -150,6 +150,10 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
         assert f"{name}={bundle.context_paths[name]}" in command
     assert "RUNTIME_RECIPE_SHA256=" in joined
 
+    config.runtime.opendde_source_commit = "different"
+    with pytest.raises(BackendError, match="opendde-src commit mismatch"):
+        build_runtime_image_command(config, source_bundle=bundle.root)
+    config.runtime.opendde_source_commit = "deadbeef"
     (bundle.root / "protenix-src" / "package.py").write_text("changed = True\n")
     with pytest.raises(BackendError, match="protenix-src sha256 mismatch"):
         build_runtime_image_command(config, source_bundle=bundle.root)
