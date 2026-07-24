@@ -937,14 +937,9 @@ def build_runtime_image_command(
             command.extend(["--build-arg", f"{name}={direct_hosts}"])
     if build_cache_dir is not None:
         cache_root = build_cache_dir.expanduser().resolve()
-        command.extend(
-            [
-                "--cache-from",
-                f"type=local,src={cache_root}",
-                "--cache-to",
-                f"type=local,dest={cache_root},mode=max",
-            ]
-        )
+        if (cache_root / "index.json").is_file():
+            command.extend(["--cache-from", f"type=local,src={cache_root}"])
+        command.extend(["--cache-to", f"type=local,dest={cache_root},mode=max"])
     command.extend(
         [
             "--build-arg",

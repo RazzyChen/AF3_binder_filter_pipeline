@@ -174,13 +174,22 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
         build_cache_dir=cache,
     )
 
-    assert ["--cache-from", f"type=local,src={cache.resolve()}"] == command[
-        command.index("--cache-from") : command.index("--cache-from") + 2
-    ]
+    assert "--cache-from" not in command
     assert ["--cache-to", f"type=local,dest={cache.resolve()},mode=max"] == command[
         command.index("--cache-to") : command.index("--cache-to") + 2
     ]
     assert command[command.index("--tag") + 1] == "aerith/fold-runtime:ci-deadbeef"
+
+    cache.mkdir()
+    (cache / "index.json").write_text("{}")
+    warmed_command = build_runtime_image_command(
+        config,
+        source_bundle=bundle.root,
+        build_cache_dir=cache,
+    )
+    assert ["--cache-from", f"type=local,src={cache.resolve()}"] == warmed_command[
+        warmed_command.index("--cache-from") : warmed_command.index("--cache-from") + 2
+    ]
 
 
 def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
