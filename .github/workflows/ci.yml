@@ -16,6 +16,8 @@ jobs:
     name: Quality
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      UV_PYTHON: "3.12"
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -45,6 +47,8 @@ jobs:
     name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
