@@ -174,6 +174,7 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
     sources = _runtime_sources(tmp_path)
     config = _runtime_config(tmp_path, sources)
     config.backend.image = "aerith/fold-runtime:ci-deadbeef"
+    config.runtime.build_proxy = "http://proxy.test:8889"
     monkeypatch.setattr(
         "af3_binder_filter.backends._git_head",
         lambda _source: "deadbeef",
@@ -192,6 +193,10 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
         command.index("--builder") : command.index("--builder") + 2
     ]
     assert "--load" in command
+    assert any(
+        argument.startswith("NO_PROXY=") and "snapshot.ubuntu.com" in argument
+        for argument in command
+    )
     assert "--cache-from" not in command
     assert ["--cache-to", f"type=local,dest={cache.resolve()},mode=max"] == command[
         command.index("--cache-to") : command.index("--cache-to") + 2
