@@ -25,8 +25,9 @@ Ubuntu apt dependencies are resolved from the fixed
 update and requires a new runtime validation run.
 All three apt transactions use the same locked BuildKit cache mounts. The
 builder downloads snapshot indexes and package archives once, the runtime stage
-reuses them, and an interrupted retry resumes from that cache. Cache contents
-are not copied into the final image.
+reuses them, and completed package archives remain available to later retries.
+APT may still revalidate indexes after an interrupted transaction. Cache
+contents are not copied into the final image.
 
 The Dockerfile is multi-stage. The `builder` stage contains CUDA development
 packages and compiles Protenix and OpenDDE fused layer-normalization extensions.

@@ -532,7 +532,9 @@ silently consume newer archive or security packages; updating the snapshot is an
 explicit recipe change that requires a new image and validation run.
 The builder, CUDA compiler install, and final runtime apt transactions share
 locked BuildKit cache mounts, so indexes and common package archives are fetched
-once and survive interrupted retries without becoming image layers.
+once across those stages. Completed package archives can also be reused by a
+later retry without becoming image layers; APT still revalidates repository
+indexes after an interrupted transaction.
 
 With an explicit builder, the wrapper passes `--load` so the candidate is
 available to `docker image inspect`, `docker run`, and the GPU smoke workflow.
