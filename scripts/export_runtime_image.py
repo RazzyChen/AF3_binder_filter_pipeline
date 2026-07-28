@@ -20,10 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from af3_binder_filter.io_utils import atomic_write_json, atomic_write_text  # noqa: E402
+from af3_binder_filter.runtime_provenance import (  # noqa: E402
+    RuntimeImageError,
+    inspect_image,
+    parse_image_inspect,
+    validate_release_provenance,
+)
 
-
-class ImageExportError(RuntimeError):
-    """Raised when an image cannot be pinned or exported safely."""
+ImageExportError = RuntimeImageError
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,49 +42,6 @@ class ImageExportResult:
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 PopenFactory = Callable[..., subprocess.Popen[bytes]]
-
-_PROVENANCE_SHA256_LABELS = (
-    "org.opencontainers.image.runtime-lock.sha256",
-    "org.aerith.runtime.recipe.sha256",
-    "org.aerith.runtime.source-bundle.sha256",
-    "org.aerith.runtime.source.af3.sha256",
-    "org.aerith.runtime.source.protenix.sha256",
-    "org.aerith.runtime.source.opendde.sha256",
-    "org.aerith.runtime.source.esm.sha256",
-)
-_RUNTIME_SOURCE_DIRTY_LABEL = "org.aerith.runtime.source.dirty"
-_UBUNTU_SNAPSHOT_LABEL = "org.aerith.runtime.ubuntu-snapshot"
-
-
-def _parse_inspect(stdout: str, image: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise ImageExportError(f"docker image inspect returned invalid JSON for {image}") from exc
-    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
-        raise ImageExportError(f"docker image inspect returned an unexpected payload for {image}")
-    image_id = payload[0].get("Id")
-    if not isinstance(image_id, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
-        raise ImageExportError(f"docker image inspect returned an invalid image ID: {image_id!r}")
-    return payload[0]
-
-
-def inspect_image(
-    image: str,
-    *,
-    docker_bin: str = "docker",
-    runner: Runner = subprocess.run,
-) -> dict[str, Any]:
-    completed = runner(
-        [docker_bin, "image", "inspect", image],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        error = (completed.stderr or completed.stdout).strip()
-        raise ImageExportError(f"docker image inspect failed for {image}: {error}")
-    return _parse_inspect(completed.stdout, image)
 
 
 def repository_from_reference(reference: str) -> str:
@@ -140,7 +101,7 @@ def _tag_immutable_image(
         check=False,
     )
     if existing.returncode == 0:
-        inspected = _parse_inspect(existing.stdout, immutable_tag)
+        inspected = parse_image_inspect(existing.stdout, immutable_tag)
         if inspected["Id"] != image_id:
             raise ImageExportError(
                 f"immutable tag already points to a different image: {immutable_tag}"
@@ -207,24 +168,6 @@ def _normalized_inspect(inspect: dict[str, Any]) -> dict[str, Any]:
         "entrypoint": config.get("Entrypoint"),
         "cmd": config.get("Cmd"),
     }
-
-
-def validate_release_provenance(inspect: dict[str, Any]) -> None:
-    config = inspect.get("Config") if isinstance(inspect.get("Config"), dict) else {}
-    labels = config.get("Labels") if isinstance(config.get("Labels"), dict) else {}
-    invalid = [
-        name
-        for name in _PROVENANCE_SHA256_LABELS
-        if re.fullmatch(r"[0-9a-f]{64}", str(labels.get(name, ""))) is None
-    ]
-    if invalid:
-        raise ImageExportError(
-            "image is missing release-grade SHA256 provenance labels: " + ", ".join(invalid)
-        )
-    if re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", str(labels.get(_UBUNTU_SNAPSHOT_LABEL, ""))) is None:
-        raise ImageExportError("image is missing a valid Ubuntu snapshot provenance label")
-    if labels.get(_RUNTIME_SOURCE_DIRTY_LABEL) != "false":
-        raise ImageExportError("image is not release-grade because source provenance is not clean")
 
 
 def export_runtime_image(

@@ -10,13 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-SCRIPTS = Path(__file__).resolve().parent
-ROOT = SCRIPTS.parent
-sys.path.insert(0, str(SCRIPTS))
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from export_runtime_image import (  # noqa: E402
-    ImageExportError,
+from af3_binder_filter.runtime_provenance import (  # noqa: E402
+    RuntimeImageError,
     inspect_image,
     validate_release_provenance,
 )
@@ -48,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         inspected = verify_runtime_image(args.image, docker_bin=args.docker_bin)
-    except (ImageExportError, OSError, subprocess.SubprocessError) as exc:
+    except (RuntimeImageError, OSError, subprocess.SubprocessError) as exc:
         print(f"runtime image verification error: {exc}", file=sys.stderr)
         return 2
     config = inspected.get("Config") if isinstance(inspected.get("Config"), dict) else {}
