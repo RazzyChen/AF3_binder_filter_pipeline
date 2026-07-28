@@ -61,6 +61,9 @@ the verified candidate is available to subsequent local `docker run` commands.
 
 Verify the resulting image before inference:
 
+    uv run python scripts/verify_runtime_image.py \
+      --image aerith/fold-runtime:local
+
     docker image inspect aerith/fold-runtime:local
     docker run --rm --gpus all --network none \
       aerith/fold-runtime:local doctor

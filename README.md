@@ -612,7 +612,8 @@ storage and not Kubernetes:
   `self-hosted, linux, x64, aerith-gpu`; it has no `push` or `pull_request`
   trigger. A shared GitHub concurrency group plus an OS file lock prevents it
   from overlapping image builds or another smoke run. It refuses a host with
-  active GPU compute processes, runs `doctor` with `--network none`, then runs
+  active GPU compute processes, verifies release provenance labels, runs `doctor`
+  with `--network none`, then runs
   AF3+OpenDDE and AF3+Protenix serially.
 
 Configure these repository variables on the self-hosted machine; all point to

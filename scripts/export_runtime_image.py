@@ -208,7 +208,7 @@ def _normalized_inspect(inspect: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_release_provenance(inspect: dict[str, Any]) -> None:
+def validate_release_provenance(inspect: dict[str, Any]) -> None:
     config = inspect.get("Config") if isinstance(inspect.get("Config"), dict) else {}
     labels = config.get("Labels") if isinstance(config.get("Labels"), dict) else {}
     invalid = [
@@ -241,7 +241,7 @@ def export_runtime_image(
 
     source_inspect = inspect_image(image, docker_bin=docker_bin, runner=runner)
     if require_provenance:
-        _validate_release_provenance(source_inspect)
+        validate_release_provenance(source_inspect)
     image_id = str(source_inspect["Id"])
     selected_repository = repository or repository_from_reference(image)
     immutable_tag = immutable_tag_for_image(selected_repository, image_id)

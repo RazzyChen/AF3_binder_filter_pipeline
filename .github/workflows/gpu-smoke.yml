@@ -76,6 +76,7 @@ jobs:
           requested_image="${{ inputs.image }}"
           requested_image="${requested_image:-aerith/fold-runtime:ci-candidate}"
           image_id="$(docker image inspect --format '{{.Id}}' "$requested_image")"
+          uv run python scripts/verify_runtime_image.py --image "$image_id"
           selected_suites="${{ inputs.suites }}"
           selected_suites="${selected_suites:-both}"
           case "$selected_suites" in

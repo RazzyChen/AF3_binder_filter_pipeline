@@ -250,6 +250,9 @@ immutable_tag_for_image = _EXPORTER["immutable_tag_for_image"]
 repository_from_reference = _EXPORTER["repository_from_reference"]
 ImageExportError = _EXPORTER["ImageExportError"]
 
+_VERIFIER = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "verify_runtime_image.py"))
+verify_runtime_image = _VERIFIER["verify_runtime_image"]
+
 
 def test_export_plan_uses_docker_save_and_zstd() -> None:
     image_id = "sha256:" + "a" * 64
@@ -267,6 +270,27 @@ def test_export_plan_uses_docker_save_and_zstd() -> None:
         "--no-progress",
         "-7",
     ]
+
+
+def test_runtime_image_verifier_accepts_clean_release_provenance() -> None:
+    image_id = "sha256:" + "e" * 64
+    labels = {
+        "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
+        "org.aerith.runtime.recipe.sha256": "2" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
+        "org.aerith.runtime.source.af3.sha256": "4" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
+        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source.dirty": "false",
+    }
+    payload = {"Id": image_id, "Config": {"Labels": labels}}
+
+    def runner(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, json.dumps([payload]), "")
+
+    inspected = verify_runtime_image("aerith/fold-runtime:test", runner=runner)
+    assert inspected["Id"] == image_id
 
 
 def test_production_export_rejects_missing_sha256_provenance(tmp_path: Path) -> None:

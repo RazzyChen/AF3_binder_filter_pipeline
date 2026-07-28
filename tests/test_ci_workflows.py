@@ -45,5 +45,7 @@ def test_gpu_smoke_workflow_requires_exclusive_host_and_integration_contract() -
     assert "nvidia-smi --query-compute-apps" in workflow
     assert "flock -n 9" in workflow
     assert "--network none" in workflow
+    assert "scripts/verify_runtime_image.py" in workflow
+    assert workflow.index("scripts/verify_runtime_image.py") < workflow.index("ci-last-known-good")
     assert "pytest -q -m integration tests/test_gpu_smoke_contract.py" in workflow
     assert "ci-last-known-good" in workflow
