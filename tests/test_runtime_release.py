@@ -241,6 +241,10 @@ def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     assert "ARG UBUNTU_SNAPSHOT=20260723T000000Z" in dockerfile
     assert dockerfile.count("snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}") == 4
     assert 'Acquire::Check-Valid-Until "false"' in dockerfile
+    assert dockerfile.count("id=aerith-apt-cache") == 3
+    assert dockerfile.count("id=aerith-apt-lists") == 3
+    assert dockerfile.count("rm -f /etc/apt/apt.conf.d/docker-clean") == 2
+    assert "rm -rf /var/lib/apt/lists/*" not in dockerfile
     assert 'org.aerith.runtime.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"' in runtime
 
     entrypoint = (Path(__file__).parents[1] / "docker" / "runtime" / "entrypoint.sh").read_text()

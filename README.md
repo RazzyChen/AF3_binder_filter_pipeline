@@ -530,6 +530,9 @@ The runtime recipe resolves Ubuntu packages from the immutable
 `snapshot.ubuntu.com/ubuntu/20260723T000000Z` repository state. Rebuilds do not
 silently consume newer archive or security packages; updating the snapshot is an
 explicit recipe change that requires a new image and validation run.
+The builder, CUDA compiler install, and final runtime apt transactions share
+locked BuildKit cache mounts, so indexes and common package archives are fetched
+once and survive interrupted retries without becoming image layers.
 
 With an explicit builder, the wrapper passes `--load` so the candidate is
 available to `docker image inspect`, `docker run`, and the GPU smoke workflow.

@@ -19,7 +19,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XLA_CLIENT_MEM_FRACTION=0.95 \
     PATH=/hmmer/bin:/usr/local/bin:/opt/conda/bin:/usr/bin:/bin
 
-RUN sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
+RUN --mount=type=cache,id=aerith-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=aerith-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
     /etc/apt/sources.list.d/ubuntu.sources \
     && printf 'Acquire::Check-Valid-Until "false";\n' \
       > /etc/apt/apt.conf.d/99aerith-snapshot \
@@ -27,8 +30,7 @@ RUN sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubu
       /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update && apt-get install -y --no-install-recommends \
       build-essential ca-certificates curl git kalign libglib2.0-0 \
-      libgl1 libxrender1 make patch python3-pip python3.12 python3.12-dev wget zlib1g-dev zstd \
-    && rm -rf /var/lib/apt/lists/*
+      libgl1 libxrender1 make patch python3-pip python3.12 python3.12-dev wget zlib1g-dev zstd
 
 RUN curl --fail --location --retry 5 --retry-all-errors \
       -o /tmp/uv.tar.gz \
@@ -121,15 +123,16 @@ RUN cd /opt/apps/esm/openfold-2.2.0 \
 
 # Both Protenix and OpenDDE use fused CUDA layer-normalization. Compile the
 # extensions in the builder so inference never needs nvcc or a host toolkit.
-RUN apt-get update \
+RUN --mount=type=cache,id=aerith-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=aerith-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
          cuda-cccl-12-6=12.6.77-1 \
          cuda-crt-12-6=12.6.85-1 \
          cuda-cudart-dev-12-6=12.6.77-1 \
          cuda-driver-dev-12-6=12.6.77-1 \
          cuda-nvcc-12-6=12.6.85-1 \
-         cuda-nvvm-12-6=12.6.85-1 \
-    && rm -rf /var/lib/apt/lists/*
+         cuda-nvvm-12-6=12.6.85-1
 # Torch CUDA headers include cuBLAS, cuSPARSE, and cuSOLVER. Reuse the exactly
 # pinned NVIDIA wheel headers already present in each environment.
 RUN CUDA_HOME=/usr/local/cuda-12.6 \
@@ -216,7 +219,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XLA_CLIENT_MEM_FRACTION=0.95 \
     PATH=/hmmer/bin:/usr/local/bin:/opt/conda/bin:/usr/bin:/bin
 
-RUN sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
+RUN --mount=type=cache,id=aerith-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=aerith-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
     /etc/apt/sources.list.d/ubuntu.sources \
     && printf 'Acquire::Check-Valid-Until "false";\n' \
       > /etc/apt/apt.conf.d/99aerith-snapshot \
@@ -224,8 +230,7 @@ RUN sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubu
       /etc/apt/sources.list.d/ubuntu.sources \
     && apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates gcc g++ kalign libc6-dev libglib2.0-0 libgl1 libgomp1 \
-      libstdc++6 libxrender1 make python3.12 zlib1g \
-    && rm -rf /var/lib/apt/lists/*
+      libstdc++6 libxrender1 make python3.12 zlib1g
 
 COPY --from=builder /hmmer /hmmer
 COPY --from=builder /opt/conda /opt/conda
