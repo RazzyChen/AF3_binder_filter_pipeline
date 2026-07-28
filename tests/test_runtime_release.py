@@ -109,6 +109,14 @@ def test_source_bundle_rejects_dirty_git_trees_without_explicit_opt_in(
     assert source_state["source_git_clean"] is False
     assert source_state["source_git_status"] == "M package.py"
 
+    config.runtime.allow_dirty_source_trees = False
+    with pytest.raises(BackendError, match="bundle contains dirty source trees: opendde-src"):
+        build_runtime_image_command(config, source_bundle=bundle.root)
+
+    config.runtime.allow_dirty_source_trees = True
+    dirty_command = build_runtime_image_command(config, source_bundle=bundle.root)
+    assert "RUNTIME_SOURCE_DIRTY=true" in dirty_command
+
 
 def test_direct_build_command_rejects_dirty_git_trees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -142,6 +150,7 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
     command = build_runtime_image_command(config, source_bundle=bundle.root)
     joined = " ".join(command)
     assert f"RUNTIME_SOURCE_BUNDLE_SHA256={bundle.bundle_sha256}" in command
+    assert "RUNTIME_SOURCE_DIRTY=false" in command
     assert f"AF3_SOURCE_SHA256={bundle.context_sha256['af3-src']}" in command
     assert f"PROTENIX_SOURCE_SHA256={bundle.context_sha256['protenix-src']}" in command
     assert f"OPENDDE_SOURCE_SHA256={bundle.context_sha256['opendde-src']}" in command
@@ -228,6 +237,7 @@ def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     assert "test ! -e /usr/local/cuda-12.6/bin/nvcc" in runtime
     assert "find /opt/envs/af3 -type f -name ptxas" in runtime
     assert 'ENTRYPOINT ["/usr/local/bin/fold-runtime"]' in runtime
+    assert 'org.aerith.runtime.source.dirty="${RUNTIME_SOURCE_DIRTY}"' in runtime
 
     entrypoint = (Path(__file__).parents[1] / "docker" / "runtime" / "entrypoint.sh").read_text()
     assert "fast_layer_norm_cuda_v2 is not None" in entrypoint
@@ -273,6 +283,30 @@ def test_production_export_rejects_missing_sha256_provenance(tmp_path: Path) -> 
         )
 
 
+def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> None:
+    labels = {
+        "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
+        "org.aerith.runtime.recipe.sha256": "2" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
+        "org.aerith.runtime.source.af3.sha256": "4" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
+        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source.dirty": "true",
+    }
+    payload = {"Id": "sha256:" + "d" * 64, "Config": {"Labels": labels}}
+
+    def runner(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, json.dumps([payload]), "")
+
+    with pytest.raises(ImageExportError, match="source provenance is not clean"):
+        export_runtime_image(
+            "aerith/fold-runtime:local",
+            tmp_path,
+            runner=runner,
+        )
+
+
 def test_export_writes_checksum_metadata_and_content_derived_tag(
     tmp_path: Path,
 ) -> None:
@@ -285,6 +319,7 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(
         "org.aerith.runtime.source.protenix.sha256": "5" * 64,
         "org.aerith.runtime.source.opendde.sha256": "6" * 64,
         "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source.dirty": "false",
     }
     inspect_payload = {
         "Id": image_id,

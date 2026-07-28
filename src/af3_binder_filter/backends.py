@@ -626,8 +626,8 @@ def _validated_runtime_source_heads(
 def _validate_verified_bundle_source_heads(
     config: AerithConfig,
     bundle: RuntimeSourceBundle,
-) -> None:
-    """Require release bundle Git heads to match the configured model revisions."""
+) -> tuple[str, ...]:
+    """Validate pinned revisions and report explicitly dirty source contexts."""
 
     contexts = bundle.manifest.get("contexts")
     if not isinstance(contexts, dict):
@@ -640,10 +640,23 @@ def _validate_verified_bundle_source_heads(
         declared = contexts.get(name)
         actual = declared.get("source_git_commit") if isinstance(declared, dict) else None
         if actual != expected:
+            found = actual or "unavailable"
             raise BackendError(
                 f"runtime source bundle context {name} commit mismatch: "
-                f"expected {expected}, found {actual or 'unavailable'}"
+                f"expected {expected}, found {found}"
             )
+    dirty = tuple(
+        name
+        for name in RUNTIME_SOURCE_CONTEXTS
+        if isinstance(contexts.get(name), dict) and contexts[name].get("source_git_clean") is False
+    )
+    if dirty and not config.runtime.allow_dirty_source_trees:
+        raise BackendError(
+            "runtime source bundle contains dirty source trees: "
+            + ", ".join(dirty)
+            + "; set runtime.allow_dirty_source_trees=true only for a non-release build"
+        )
+    return dirty
 
 
 def _update_hash_field(digest: Any, value: str | bytes) -> None:
@@ -914,18 +927,22 @@ def build_runtime_image_command(
     if context_root is not None and source_bundle is not None:
         raise BackendError("context_root and source_bundle are mutually exclusive")
     verified_bundle: RuntimeSourceBundle | None = None
+    source_dirty = "unavailable"
     if source_bundle is not None:
         verified_bundle = verify_runtime_source_bundle(source_bundle)
-        _validate_verified_bundle_source_heads(config, verified_bundle)
+        dirty_bundle_contexts = _validate_verified_bundle_source_heads(config, verified_bundle)
+        source_dirty = "true" if dirty_bundle_contexts else "false"
         sources = verified_bundle.context_paths
     elif context_root is None:
         sources = _runtime_source_paths(config)
-        _validated_runtime_source_heads(config, sources)
+        _heads, worktree_statuses = _validated_runtime_source_heads(config, sources)
+        source_dirty = "true" if any(worktree_statuses.values()) else "false"
     else:
         resolved_context_root = context_root.expanduser().resolve()
         if (resolved_context_root / RUNTIME_SOURCE_BUNDLE_MANIFEST).is_file():
             verified_bundle = verify_runtime_source_bundle(resolved_context_root)
-            _validate_verified_bundle_source_heads(config, verified_bundle)
+            dirty_bundle_contexts = _validate_verified_bundle_source_heads(config, verified_bundle)
+            source_dirty = "true" if dirty_bundle_contexts else "false"
             sources = verified_bundle.context_paths
         else:
             sources = {name: resolved_context_root / name for name in RUNTIME_SOURCE_CONTEXTS}
@@ -993,6 +1010,8 @@ def build_runtime_image_command(
             "--build-arg",
             "RUNTIME_SOURCE_BUNDLE_SHA256="
             + (verified_bundle.bundle_sha256 if verified_bundle else "unavailable"),
+            "--build-arg",
+            f"RUNTIME_SOURCE_DIRTY={source_dirty}",
         ]
     )
     source_hash_arguments = {

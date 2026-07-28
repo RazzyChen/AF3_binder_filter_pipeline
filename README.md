@@ -506,10 +506,15 @@ runtime:
 ```
 
 That exception is recorded in the bundle manifest; it does not make an
-uncommitted upstream tree release-grade. The build script accepts `--image` for
-an explicit candidate tag and `--cache-dir /ssd/aerith-buildkit-cache`; it only
-imports a local BuildKit cache after that cache has a valid `index.json`. Local
-cache export requires a named `docker-container` Buildx builder, for example:
+uncommitted upstream tree release-grade. A dirty bundle is accepted for a build
+only while the same explicit override is active. Its image is labelled
+`org.aerith.runtime.source.dirty=true`, and the release exporter rejects it
+unless `--allow-unprovenanced` is also explicit.
+
+The build script accepts `--image` for an explicit candidate tag and
+`--cache-dir /ssd/aerith-buildkit-cache`; it only imports a local BuildKit cache
+after that cache has a valid `index.json`. Local cache export requires a named
+`docker-container` Buildx builder, for example:
 
 ```bash
 docker buildx create --name aerith-runtime-ci --driver docker-container --use
@@ -550,9 +555,10 @@ zstd --decompress --stdout <archive>.docker.tar.zst | docker image load
 docker image inspect <immutable-tag-printed-by-export>
 ```
 
-By default export refuses images missing release provenance labels.
-`--allow-unprovenanced` exists only for explicitly acknowledged historical
-images and must not be described as a reproducible release.
+By default export refuses images with missing provenance labels or dirty source
+provenance. `--allow-unprovenanced` exists only for explicitly acknowledged
+historical or non-release experimental images and must not be described as a
+reproducible release.
 
 This documentation does not claim that a particular local image has already
 been exported or GPU-smoke-tested. Record those facts only after the archive,

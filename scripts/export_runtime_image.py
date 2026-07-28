@@ -48,6 +48,7 @@ _PROVENANCE_SHA256_LABELS = (
     "org.aerith.runtime.source.opendde.sha256",
     "org.aerith.runtime.source.esm.sha256",
 )
+_RUNTIME_SOURCE_DIRTY_LABEL = "org.aerith.runtime.source.dirty"
 
 
 def _parse_inspect(stdout: str, image: str) -> dict[str, Any]:
@@ -219,6 +220,8 @@ def _validate_release_provenance(inspect: dict[str, Any]) -> None:
         raise ImageExportError(
             "image is missing release-grade SHA256 provenance labels: " + ", ".join(invalid)
         )
+    if labels.get(_RUNTIME_SOURCE_DIRTY_LABEL) != "false":
+        raise ImageExportError("image is not release-grade because source provenance is not clean")
 
 
 def export_runtime_image(

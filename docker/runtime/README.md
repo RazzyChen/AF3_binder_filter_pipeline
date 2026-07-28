@@ -38,6 +38,8 @@ The wrapper rejects dirty Git source trees by default and, for a frozen bundle,
 rechecks its OpenDDE and ESM commits against the configured pins. For a deliberate
 local experiment only, `runtime.allow_dirty_source_trees=true` records the dirty
 state in the bundle manifest. It is not release provenance.
+A dirty bundle can only be built while the same override remains explicit; the
+result is labelled as dirty and is rejected by the release exporter by default.
 
 A self-hosted builder can select a candidate tag and persistent local cache:
 
