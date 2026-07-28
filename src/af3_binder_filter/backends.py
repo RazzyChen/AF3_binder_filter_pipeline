@@ -976,7 +976,6 @@ def build_runtime_image_command(
             command.extend(["--build-arg", f"{name}={config.runtime.build_proxy}"])
         direct_hosts = (
             "localhost,127.0.0.1,archive.ubuntu.com,security.ubuntu.com,"
-            "snapshot.ubuntu.com,"
             "developer.download.nvidia.com,developer.download.nvidia.cn"
         )
         for name in ("NO_PROXY", "no_proxy"):
