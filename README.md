@@ -529,6 +529,9 @@ uv run python scripts/build_runtime_image.py \
 With an explicit builder, the wrapper passes `--load` so the candidate is
 available to `docker image inspect`, `docker run`, and the GPU smoke workflow.
 
+The self-hosted workflow verifies an existing named builder has that exact
+driver and fails preflight instead of silently reusing an incompatible builder.
+
 ### Export and restore
 
 Export uses `docker image save`, preserving layers, labels, and image identity;

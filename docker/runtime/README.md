@@ -53,6 +53,9 @@ A self-hosted builder can select a candidate tag and persistent local cache:
 
 The local cache exporter requires the `docker-container` Buildx driver; Docker's
 default `docker` driver cannot export `type=local` cache data.
+
+The CI preflight rejects a same-named builder using any other driver.
+
 When invoked with `--builder`, the Aerith build wrapper also passes `--load`, so
 the verified candidate is available to subsequent local `docker run` commands.
 

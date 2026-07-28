@@ -83,7 +83,12 @@ jobs:
             exit 2
           fi
           echo "RUNTIME_IMAGE=aerith/fold-runtime:ci-${suffix}" >> "$GITHUB_ENV"
-          if docker buildx inspect "$AERITH_RUNTIME_BUILDX_BUILDER" >/dev/null 2>&1; then
+          if builder_info="$(docker buildx inspect "$AERITH_RUNTIME_BUILDX_BUILDER" 2>/dev/null)"; then
+            builder_driver="$(awk '$1 == "Driver:" {print $2; exit}' <<< "$builder_info")"
+            if [[ "$builder_driver" != "docker-container" ]]; then
+              echo "Buildx builder $AERITH_RUNTIME_BUILDX_BUILDER uses unsupported driver: ${builder_driver:-unknown}" >&2
+              exit 2
+            fi
             docker buildx use "$AERITH_RUNTIME_BUILDX_BUILDER"
           else
             docker buildx create \
