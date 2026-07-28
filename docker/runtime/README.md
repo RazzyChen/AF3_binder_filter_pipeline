@@ -20,6 +20,10 @@ The Dockerfile downloads and SHA-256 verifies the official
 and [Foldseek 10-941cd33 GPU](https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-gpu.tar.gz)
 archives. Runtime commands never mount host MMseqs2 or Foldseek executables.
 
+Ubuntu apt dependencies are resolved from the fixed
+`20260723T000000Z` Ubuntu snapshot. Changing that date is an explicit recipe
+update and requires a new runtime validation run.
+
 The Dockerfile is multi-stage. The `builder` stage contains CUDA development
 packages and compiles Protenix and OpenDDE fused layer-normalization extensions.
 The final `runtime` stage copies only execution artifacts: it retains AF3's

@@ -492,8 +492,8 @@ uv run python scripts/build_runtime_image.py \
 ```
 
 The release builder verifies the bundle before constructing BuildKit contexts.
-Release-grade source, recipe, and lock hashes are written into image labels and
-are checked by the export tool.
+Release-grade source, recipe, lock hashes, and the fixed Ubuntu repository
+snapshot are written into image labels and checked by the export tool.
 
 A source bundle also records each source Git head and dirty status. The build
 command rechecks the OpenDDE and ESM heads against the configured pinned commits
@@ -525,6 +525,11 @@ uv run python scripts/build_runtime_image.py \
   --cache-dir /ssd/aerith-buildkit-cache \
   --builder aerith-runtime-ci
 ```
+
+The runtime recipe resolves Ubuntu packages from the immutable
+`snapshot.ubuntu.com/ubuntu/20260723T000000Z` repository state. Rebuilds do not
+silently consume newer archive or security packages; updating the snapshot is an
+explicit recipe change that requires a new image and validation run.
 
 With an explicit builder, the wrapper passes `--load` so the candidate is
 available to `docker image inspect`, `docker run`, and the GPU smoke workflow.

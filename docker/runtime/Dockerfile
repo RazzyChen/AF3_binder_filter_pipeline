@@ -1,5 +1,7 @@
+ARG UBUNTU_SNAPSHOT=20260723T000000Z
 ARG CUDA_BASE=nvcr.io/nvidia/cuda:12.6.3-base-ubuntu24.04@sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e
 FROM ${CUDA_BASE} AS builder
+ARG UBUNTU_SNAPSHOT
 
 ARG UV_VERSION=0.11.28
 ARG UV_SHA256=e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
@@ -17,7 +19,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XLA_CLIENT_MEM_FRACTION=0.95 \
     PATH=/hmmer/bin:/usr/local/bin:/opt/conda/bin:/usr/bin:/bin
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
+    /etc/apt/sources.list.d/ubuntu.sources \
+    && printf 'Acquire::Check-Valid-Until "false";\n' \
+      > /etc/apt/apt.conf.d/99aerith-snapshot \
+    && grep -F "https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/" \
+      /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
       build-essential ca-certificates curl git kalign libglib2.0-0 \
       libgl1 libxrender1 make patch python3-pip python3.12 python3.12-dev wget zlib1g-dev zstd \
     && rm -rf /var/lib/apt/lists/*
@@ -189,6 +197,7 @@ ENTRYPOINT ["/usr/local/bin/fold-runtime"]
 CMD []
 
 FROM ${CUDA_BASE} AS runtime
+ARG UBUNTU_SNAPSHOT
 
 # The final image retains only runtime libraries and host-side C/C++ support
 # for framework JITs. CUDA compilation remains exclusively in the builder.
@@ -207,7 +216,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XLA_CLIENT_MEM_FRACTION=0.95 \
     PATH=/hmmer/bin:/usr/local/bin:/opt/conda/bin:/usr/bin:/bin
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -ri "s#http://(archive|security).ubuntu.com/ubuntu/#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" \
+    /etc/apt/sources.list.d/ubuntu.sources \
+    && printf 'Acquire::Check-Valid-Until "false";\n' \
+      > /etc/apt/apt.conf.d/99aerith-snapshot \
+    && grep -F "https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/" \
+      /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates gcc g++ kalign libc6-dev libglib2.0-0 libgl1 libgomp1 \
       libstdc++6 libxrender1 make python3.12 zlib1g \
     && rm -rf /var/lib/apt/lists/*
@@ -258,6 +273,7 @@ ARG OPENDDE_SOURCE_SHA256=unavailable
 ARG ESM_SOURCE_SHA256=unavailable
 LABEL org.opencontainers.image.title="Aerith unified fold runtime" \
       org.opencontainers.image.base.digest="sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e" \
+      org.aerith.runtime.ubuntu-snapshot="${UBUNTU_SNAPSHOT}" \
       org.opencontainers.image.version="af3-${AF3_VERSION}_protenix-${PROTENIX_VERSION}" \
       org.opencontainers.image.revision.opendde="${OPENDDE_COMMIT}" \
       org.opencontainers.image.revision.esm="${ESM_COMMIT}" \

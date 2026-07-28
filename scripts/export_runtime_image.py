@@ -49,6 +49,7 @@ _PROVENANCE_SHA256_LABELS = (
     "org.aerith.runtime.source.esm.sha256",
 )
 _RUNTIME_SOURCE_DIRTY_LABEL = "org.aerith.runtime.source.dirty"
+_UBUNTU_SNAPSHOT_LABEL = "org.aerith.runtime.ubuntu-snapshot"
 
 
 def _parse_inspect(stdout: str, image: str) -> dict[str, Any]:
@@ -220,6 +221,8 @@ def validate_release_provenance(inspect: dict[str, Any]) -> None:
         raise ImageExportError(
             "image is missing release-grade SHA256 provenance labels: " + ", ".join(invalid)
         )
+    if re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", str(labels.get(_UBUNTU_SNAPSHOT_LABEL, ""))) is None:
+        raise ImageExportError("image is missing a valid Ubuntu snapshot provenance label")
     if labels.get(_RUNTIME_SOURCE_DIRTY_LABEL) != "false":
         raise ImageExportError("image is not release-grade because source provenance is not clean")
 

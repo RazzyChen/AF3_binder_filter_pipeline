@@ -215,7 +215,7 @@ def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     dockerfile = (Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile").read_text()
     builder, runtime = dockerfile.split("FROM ${CUDA_BASE} AS runtime", maxsplit=1)
 
-    assert dockerfile.startswith("ARG CUDA_BASE=")
+    assert dockerfile.splitlines()[1].startswith("ARG CUDA_BASE=")
     assert "FROM ${CUDA_BASE} AS builder" in builder
     assert "cuda-nvcc-12-6" in builder
     assert "LAYERNORM_TYPE=fast_layernorm" in builder
@@ -238,6 +238,10 @@ def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     assert "find /opt/envs/af3 -type f -name ptxas" in runtime
     assert 'ENTRYPOINT ["/usr/local/bin/fold-runtime"]' in runtime
     assert 'org.aerith.runtime.source.dirty="${RUNTIME_SOURCE_DIRTY}"' in runtime
+    assert "ARG UBUNTU_SNAPSHOT=20260723T000000Z" in dockerfile
+    assert dockerfile.count("snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}") == 4
+    assert 'Acquire::Check-Valid-Until "false"' in dockerfile
+    assert 'org.aerith.runtime.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"' in runtime
 
     entrypoint = (Path(__file__).parents[1] / "docker" / "runtime" / "entrypoint.sh").read_text()
     assert "fast_layer_norm_cuda_v2 is not None" in entrypoint
@@ -283,6 +287,7 @@ def test_runtime_image_verifier_accepts_clean_release_provenance() -> None:
         "org.aerith.runtime.source.opendde.sha256": "6" * 64,
         "org.aerith.runtime.source.esm.sha256": "7" * 64,
         "org.aerith.runtime.source.dirty": "false",
+        "org.aerith.runtime.ubuntu-snapshot": "20260723T000000Z",
     }
     payload = {"Id": image_id, "Config": {"Labels": labels}}
 
@@ -307,6 +312,30 @@ def test_production_export_rejects_missing_sha256_provenance(tmp_path: Path) -> 
         )
 
 
+def test_production_export_rejects_missing_ubuntu_snapshot(tmp_path: Path) -> None:
+    labels = {
+        "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
+        "org.aerith.runtime.recipe.sha256": "2" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
+        "org.aerith.runtime.source.af3.sha256": "4" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
+        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source.dirty": "false",
+    }
+    payload = {"Id": "sha256:" + "f" * 64, "Config": {"Labels": labels}}
+
+    def runner(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, json.dumps([payload]), "")
+
+    with pytest.raises(ImageExportError, match="Ubuntu snapshot provenance"):
+        export_runtime_image(
+            "aerith/fold-runtime:local",
+            tmp_path,
+            runner=runner,
+        )
+
+
 def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> None:
     labels = {
         "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
@@ -317,6 +346,7 @@ def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> No
         "org.aerith.runtime.source.opendde.sha256": "6" * 64,
         "org.aerith.runtime.source.esm.sha256": "7" * 64,
         "org.aerith.runtime.source.dirty": "true",
+        "org.aerith.runtime.ubuntu-snapshot": "20260723T000000Z",
     }
     payload = {"Id": "sha256:" + "d" * 64, "Config": {"Labels": labels}}
 
@@ -344,6 +374,7 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(
         "org.aerith.runtime.source.opendde.sha256": "6" * 64,
         "org.aerith.runtime.source.esm.sha256": "7" * 64,
         "org.aerith.runtime.source.dirty": "false",
+        "org.aerith.runtime.ubuntu-snapshot": "20260723T000000Z",
     }
     inspect_payload = {
         "Id": image_id,
