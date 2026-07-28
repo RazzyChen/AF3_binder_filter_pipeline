@@ -951,7 +951,7 @@ def build_runtime_image_command(
     recipe_sha256 = _runtime_recipe_sha256(dockerfile)
     command = [config.backend.docker_bin, "build", "--progress", "plain"]
     if buildx_builder:
-        command.extend(["--builder", buildx_builder])
+        command.extend(["--builder", buildx_builder, "--load"])
     if config.runtime.build_add_host:
         command.extend(["--add-host", config.runtime.build_add_host])
     if config.runtime.build_proxy:

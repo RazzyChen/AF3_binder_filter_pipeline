@@ -182,6 +182,7 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
     assert ["--builder", "aerith-test-builder"] == command[
         command.index("--builder") : command.index("--builder") + 2
     ]
+    assert "--load" in command
     assert "--cache-from" not in command
     assert ["--cache-to", f"type=local,dest={cache.resolve()},mode=max"] == command[
         command.index("--cache-to") : command.index("--cache-to") + 2
