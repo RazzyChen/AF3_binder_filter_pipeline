@@ -544,7 +544,7 @@ def test_runtime_staging_keeps_af3_common_but_excludes_opendde_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sources = {}
-    for name in ("af3", "protenix", "opendde", "esm"):
+    for name in ("af3", "protenix", "opendde", "esm", "openfold"):
         source = tmp_path / name
         source.mkdir()
         (source / "package.py").write_text("VALUE = 1\n")
@@ -558,11 +558,15 @@ def test_runtime_staging_keeps_af3_common_but_excludes_opendde_data(
     config = AerithConfig()
     config.project.work_dir = str(tmp_path / "work")
     config.runtime.af3_source_dir = str(sources["af3"])
+    config.runtime.af3_source_commit = "deadbeef"
     config.runtime.protenix_source_dir = str(sources["protenix"])
+    config.runtime.protenix_source_commit = "deadbeef"
     config.runtime.opendde_source_dir = str(sources["opendde"])
     config.runtime.esm_source_dir = str(sources["esm"])
+    config.runtime.openfold_source_dir = str(sources["openfold"])
     config.runtime.opendde_source_commit = "deadbeef"
     config.runtime.esm_source_commit = "deadbeef"
+    config.runtime.openfold_source_commit = "deadbeef"
 
     def fake_git(command, **_kwargs):
         stdout = "deadbeef\n" if "rev-parse" in command else ""

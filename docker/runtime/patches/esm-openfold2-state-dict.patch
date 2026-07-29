@@ -1,0 +1,33 @@
+diff --git a/esm/esmfold/v1/pretrained.py b/esm/esmfold/v1/pretrained.py
+index 1dc7b85..bf756dc 100644
+--- a/esm/esmfold/v1/pretrained.py
++++ b/esm/esmfold/v1/pretrained.py
+@@ -10,6 +10,20 @@ import torch
+ from esm.esmfold.v1.esmfold import ESMFold
+ 
+ 
++def _upgrade_legacy_openfold_state_dict(model_state):
++    legacy_prefixes = (
++        "trunk.structure_module.ipa.linear_q_points.",
++        "trunk.structure_module.ipa.linear_kv_points.",
++    )
++
++    for prefix in legacy_prefixes:
++        for suffix in ("weight", "bias"):
++            legacy_key = prefix + suffix
++            openfold_2_key = prefix + "linear." + suffix
++            if legacy_key in model_state and openfold_2_key not in model_state:
++                model_state[openfold_2_key] = model_state[legacy_key]
++
++
+ def _load_model(model_name):
+     if model_name.endswith(".pt"):  # local, treat as filepath
+         model_path = Path(model_name)
+@@ -20,6 +34,7 @@ def _load_model(model_name):
+ 
+     cfg = model_data["cfg"]["model"]
+     model_state = model_data["model"]
++    _upgrade_legacy_openfold_state_dict(model_state)
+     model = ESMFold(esmfold_config=cfg)
+ 
+     expected_keys = set(model.state_dict().keys())

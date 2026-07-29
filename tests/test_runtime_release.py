@@ -21,7 +21,7 @@ from af3_binder_filter.config import AerithConfig
 
 def _runtime_sources(tmp_path: Path) -> dict[str, Path]:
     sources: dict[str, Path] = {}
-    for name in ("af3", "protenix", "opendde", "esm"):
+    for name in ("af3", "protenix", "opendde", "esm", "openfold"):
         source = tmp_path / "upstream" / name
         source.mkdir(parents=True)
         (source / "package.py").write_text(f"NAME = {name!r}\n")
@@ -41,11 +41,15 @@ def _runtime_config(tmp_path: Path, sources: dict[str, Path]) -> AerithConfig:
     config = AerithConfig()
     config.project.work_dir = str(tmp_path / "work")
     config.runtime.af3_source_dir = str(sources["af3"])
+    config.runtime.af3_source_commit = "deadbeef"
     config.runtime.protenix_source_dir = str(sources["protenix"])
+    config.runtime.protenix_source_commit = "deadbeef"
     config.runtime.opendde_source_dir = str(sources["opendde"])
     config.runtime.esm_source_dir = str(sources["esm"])
+    config.runtime.openfold_source_dir = str(sources["openfold"])
     config.runtime.opendde_source_commit = "deadbeef"
     config.runtime.esm_source_commit = "deadbeef"
+    config.runtime.openfold_source_commit = "deadbeef"
     config.runtime.minimum_build_free_gib = 0
     config.runtime.dockerfile = str(Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile")
     return config
@@ -78,6 +82,7 @@ def test_source_bundle_is_filtered_hashed_and_does_not_touch_sources(
         "protenix-src",
         "opendde-src",
         "esm-src",
+        "openfold-src",
     }
     assert verify_runtime_source_bundle(bundle.root).bundle_sha256 == bundle.bundle_sha256
 
@@ -155,6 +160,8 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
     assert f"PROTENIX_SOURCE_SHA256={bundle.context_sha256['protenix-src']}" in command
     assert f"OPENDDE_SOURCE_SHA256={bundle.context_sha256['opendde-src']}" in command
     assert f"ESM_SOURCE_SHA256={bundle.context_sha256['esm-src']}" in command
+    assert f"OPENFOLD_SOURCE_SHA256={bundle.context_sha256['openfold-src']}" in command
+    assert "RUNTIME_SOURCE_LOCK_SHA256=unavailable" in command
     for name in bundle.context_paths:
         assert f"{name}={bundle.context_paths[name]}" in command
     assert "RUNTIME_RECIPE_SHA256=" in joined
@@ -285,11 +292,13 @@ def test_runtime_image_verifier_accepts_clean_release_provenance() -> None:
     labels = {
         "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
         "org.aerith.runtime.recipe.sha256": "2" * 64,
-        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
-        "org.aerith.runtime.source.af3.sha256": "4" * 64,
-        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
-        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
-        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source-lock.sha256": "3" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.source.af3.sha256": "5" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "6" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "7" * 64,
+        "org.aerith.runtime.source.esm.sha256": "8" * 64,
+        "org.aerith.runtime.source.openfold.sha256": "9" * 64,
         "org.aerith.runtime.source.dirty": "false",
         "org.aerith.runtime.ubuntu-snapshot": "20260723T000000Z",
     }
@@ -320,11 +329,13 @@ def test_production_export_rejects_missing_ubuntu_snapshot(tmp_path: Path) -> No
     labels = {
         "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
         "org.aerith.runtime.recipe.sha256": "2" * 64,
-        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
-        "org.aerith.runtime.source.af3.sha256": "4" * 64,
-        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
-        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
-        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source-lock.sha256": "3" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.source.af3.sha256": "5" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "6" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "7" * 64,
+        "org.aerith.runtime.source.esm.sha256": "8" * 64,
+        "org.aerith.runtime.source.openfold.sha256": "9" * 64,
         "org.aerith.runtime.source.dirty": "false",
     }
     payload = {"Id": "sha256:" + "f" * 64, "Config": {"Labels": labels}}
@@ -344,11 +355,13 @@ def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> No
     labels = {
         "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
         "org.aerith.runtime.recipe.sha256": "2" * 64,
-        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
-        "org.aerith.runtime.source.af3.sha256": "4" * 64,
-        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
-        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
-        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source-lock.sha256": "3" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.source.af3.sha256": "5" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "6" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "7" * 64,
+        "org.aerith.runtime.source.esm.sha256": "8" * 64,
+        "org.aerith.runtime.source.openfold.sha256": "9" * 64,
         "org.aerith.runtime.source.dirty": "true",
         "org.aerith.runtime.ubuntu-snapshot": "20260723T000000Z",
     }
@@ -372,11 +385,13 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(
     provenance = {
         "org.opencontainers.image.runtime-lock.sha256": "1" * 64,
         "org.aerith.runtime.recipe.sha256": "2" * 64,
-        "org.aerith.runtime.source-bundle.sha256": "3" * 64,
-        "org.aerith.runtime.source.af3.sha256": "4" * 64,
-        "org.aerith.runtime.source.protenix.sha256": "5" * 64,
-        "org.aerith.runtime.source.opendde.sha256": "6" * 64,
-        "org.aerith.runtime.source.esm.sha256": "7" * 64,
+        "org.aerith.runtime.source-lock.sha256": "3" * 64,
+        "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.source.af3.sha256": "5" * 64,
+        "org.aerith.runtime.source.protenix.sha256": "6" * 64,
+        "org.aerith.runtime.source.opendde.sha256": "7" * 64,
+        "org.aerith.runtime.source.esm.sha256": "8" * 64,
+        "org.aerith.runtime.source.openfold.sha256": "9" * 64,
         "org.aerith.runtime.source.dirty": "false",
         "org.aerith.runtime.ubuntu-snapshot": "20260723T000000Z",
     }

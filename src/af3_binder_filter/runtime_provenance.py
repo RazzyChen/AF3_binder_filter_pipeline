@@ -17,11 +17,13 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 PROVENANCE_SHA256_LABELS = (
     "org.opencontainers.image.runtime-lock.sha256",
     "org.aerith.runtime.recipe.sha256",
+    "org.aerith.runtime.source-lock.sha256",
     "org.aerith.runtime.source-bundle.sha256",
     "org.aerith.runtime.source.af3.sha256",
     "org.aerith.runtime.source.protenix.sha256",
     "org.aerith.runtime.source.opendde.sha256",
     "org.aerith.runtime.source.esm.sha256",
+    "org.aerith.runtime.source.openfold.sha256",
 )
 RUNTIME_SOURCE_DIRTY_LABEL = "org.aerith.runtime.source.dirty"
 UBUNTU_SNAPSHOT_LABEL = "org.aerith.runtime.ubuntu-snapshot"

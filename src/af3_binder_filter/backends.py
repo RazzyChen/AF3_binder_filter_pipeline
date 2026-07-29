@@ -34,6 +34,7 @@ RUNTIME_SOURCE_CONTEXTS = (
     "protenix-src",
     "opendde-src",
     "esm-src",
+    "openfold-src",
 )
 RUNTIME_SOURCE_BUNDLE_SCHEMA = "aerith.runtime-source-bundle.v1"
 RUNTIME_SOURCE_BUNDLE_MANIFEST = "manifest.json"
@@ -561,6 +562,7 @@ def _runtime_source_paths(config: AerithConfig) -> dict[str, Path]:
         "protenix-src": Path(config.runtime.protenix_source_dir).expanduser().resolve(),
         "opendde-src": Path(config.runtime.opendde_source_dir).expanduser().resolve(),
         "esm-src": Path(config.runtime.esm_source_dir).expanduser().resolve(),
+        "openfold-src": Path(config.runtime.openfold_source_dir).expanduser().resolve(),
     }
 
 
@@ -600,8 +602,11 @@ def _validated_runtime_source_heads(
     heads = {name: _git_head(source) for name, source in sources.items()}
     worktree_statuses = {name: _git_worktree_status(source) for name, source in sources.items()}
     expected_commits = {
+        "af3-src": config.runtime.af3_source_commit,
+        "protenix-src": config.runtime.protenix_source_commit,
         "opendde-src": config.runtime.opendde_source_commit,
         "esm-src": config.runtime.esm_source_commit,
+        "openfold-src": config.runtime.openfold_source_commit,
     }
     for name, expected in expected_commits.items():
         actual = heads[name]
@@ -633,8 +638,11 @@ def _validate_verified_bundle_source_heads(
     if not isinstance(contexts, dict):
         raise BackendError("runtime source bundle contexts are invalid")
     expected_commits = {
+        "af3-src": config.runtime.af3_source_commit,
+        "protenix-src": config.runtime.protenix_source_commit,
         "opendde-src": config.runtime.opendde_source_commit,
         "esm-src": config.runtime.esm_source_commit,
+        "openfold-src": config.runtime.openfold_source_commit,
     }
     for name, expected in expected_commits.items():
         declared = contexts.get(name)
@@ -737,7 +745,7 @@ def create_runtime_source_bundle(
     *,
     force: bool = False,
 ) -> RuntimeSourceBundle:
-    """Copy four filtered source trees into an atomic, content-hashed bundle."""
+    """Copy filtered source trees into an atomic, content-hashed bundle."""
 
     sources = _runtime_source_paths(config)
     heads, worktree_statuses = _validated_runtime_source_heads(config, sources)
@@ -843,7 +851,9 @@ def verify_runtime_source_bundle(bundle_root: Path) -> RuntimeSourceBundle:
         )
     contexts = manifest.get("contexts")
     if not isinstance(contexts, dict) or set(contexts) != set(RUNTIME_SOURCE_CONTEXTS):
-        raise BackendError("runtime source bundle must contain exactly four named contexts")
+        raise BackendError(
+            f"runtime source bundle must contain exactly {len(RUNTIME_SOURCE_CONTEXTS)} named contexts"
+        )
     verified_contexts: dict[str, dict[str, Any]] = {}
     context_paths: dict[str, Path] = {}
     for name in RUNTIME_SOURCE_CONTEXTS:
@@ -900,6 +910,8 @@ def _runtime_recipe_sha256(dockerfile: Path) -> str:
         dockerfile.parent / "entrypoint.sh",
         dockerfile.parent / "esm_if_batch.py",
         dockerfile.parent / "openfold-cuda-11.6.patch",
+        dockerfile.parent / "sources.lock.yaml",
+        dockerfile.parent / "patches" / "esm-openfold2-state-dict.patch",
         repository_root / "docker" / "feature-builder" / "build_local_features.py",
         repository_root / "docker" / "feature-builder" / "mmseqs_wrapper.py",
         repository_root / "docker" / "feature-builder" / "convert_af3_templates.py",
@@ -966,6 +978,11 @@ def build_runtime_image_command(
         _update_hash_field(lock_hash, path.name)
         _update_hash_field(lock_hash, path.read_bytes())
     recipe_sha256 = _runtime_recipe_sha256(dockerfile)
+    source_lock_sha256 = (
+        str(verified_bundle.manifest.get("source_lock_sha256", "unavailable"))
+        if verified_bundle is not None
+        else "unavailable"
+    )
     command = [config.backend.docker_bin, "build", "--progress", "plain"]
     if buildx_builder:
         command.extend(["--builder", buildx_builder, "--load"])
@@ -988,9 +1005,15 @@ def build_runtime_image_command(
     command.extend(
         [
             "--build-arg",
+            f"AF3_COMMIT={config.runtime.af3_source_commit}",
+            "--build-arg",
+            f"PROTENIX_COMMIT={config.runtime.protenix_source_commit}",
+            "--build-arg",
             f"OPENDDE_COMMIT={config.runtime.opendde_source_commit}",
             "--build-arg",
             f"ESM_COMMIT={config.runtime.esm_source_commit}",
+            "--build-arg",
+            f"OPENFOLD_COMMIT={config.runtime.openfold_source_commit}",
             "--build-arg",
             f"MMSEQS_RELEASE={config.runtime.mmseqs_release}",
             "--build-arg",
@@ -1008,6 +1031,8 @@ def build_runtime_image_command(
             "--build-arg",
             f"RUNTIME_RECIPE_SHA256={recipe_sha256}",
             "--build-arg",
+            f"RUNTIME_SOURCE_LOCK_SHA256={source_lock_sha256}",
+            "--build-arg",
             "RUNTIME_SOURCE_BUNDLE_SHA256="
             + (verified_bundle.bundle_sha256 if verified_bundle else "unavailable"),
             "--build-arg",
@@ -1019,6 +1044,7 @@ def build_runtime_image_command(
         "protenix-src": "PROTENIX_SOURCE_SHA256",
         "opendde-src": "OPENDDE_SOURCE_SHA256",
         "esm-src": "ESM_SOURCE_SHA256",
+        "openfold-src": "OPENFOLD_SOURCE_SHA256",
     }
     for context_name in RUNTIME_SOURCE_CONTEXTS:
         source_sha256 = (

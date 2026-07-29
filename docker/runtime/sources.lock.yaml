@@ -1,0 +1,80 @@
+schema: aerith.runtime-sources.v1
+
+build:
+  ubuntu_snapshot: 20260723T000000Z
+  cuda_base: nvcr.io/nvidia/cuda:12.6.3-base-ubuntu24.04@sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e
+
+sources:
+  af3:
+    component: uv
+    context: af3-src
+    repository: https://github.com/google-deepmind/alphafold3.git
+    ref: v3.0.3
+    commit: 7b197fe859790fc3e04d03ea70dd0b9ba48881c9
+    tree_sha256: eb8169361122a415b16cf12590a881a92cf3784cd6d0999fce322e78fbdd22bf
+    patches: []
+  opendde:
+    component: uv
+    context: opendde-src
+    repository: https://github.com/aurekaresearch/OpenDDE.git
+    ref: 266ce4c49d492ad1077866000d83704999985f46
+    commit: 266ce4c49d492ad1077866000d83704999985f46
+    tree_sha256: eb2b0ab3ce0c037b5f5ca774e7d1a2e8e5c1e017735f4f7873c48ea3a93d0cf3
+    patches: []
+  protenix:
+    component: conda
+    context: protenix-src
+    repository: https://github.com/bytedance/Protenix.git
+    ref: v2.0.0
+    commit: 2475421477ab414b571149ad4a875c390ff8a35d
+    tree_sha256: a0a685dc4447f8913db2143a53fca964abf495ca48420bebf38b4f68241476d0
+    patches: []
+  esm:
+    component: conda
+    context: esm-src
+    repository: https://github.com/facebookresearch/esm.git
+    ref: 2b369911bb5b4b0dda914521b9475cad1656b2ac
+    commit: 2b369911bb5b4b0dda914521b9475cad1656b2ac
+    tree_sha256: 4be5089528cb87222e60e10bf61f47032ba6bb6875e4750457b9aa1988af1f5b
+    patches:
+      - path: docker/runtime/patches/esm-openfold2-state-dict.patch
+        sha256: 773ea83000bf737516bd1a9dc340dbcb7f4da03122a024d818822db2ebfb9013
+  openfold:
+    component: conda
+    context: openfold-src
+    repository: https://github.com/aqlaboratory/openfold.git
+    ref: v2.2.0
+    commit: e938c184a291bf053af3b14c1e3e8bb29aee57e2
+    tree_sha256: 781bf6a2c225e471ae8223a59289dc4cc249b1d792fa0788210cc4a1dfd739fd
+    patches:
+      - path: docker/runtime/openfold-cuda-11.6.patch
+        sha256: ff14379334deab39bb66be35451dec8584ed55c038c488b6cfe7d6e76857dbf8
+
+artifacts:
+  uv:
+    component: uv
+    version: 0.11.28
+    url: https://github.com/astral-sh/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz
+    sha256: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+  miniforge:
+    component: conda
+    version: 26.3.2-3
+    url: https://github.com/conda-forge/miniforge/releases/download/26.3.2-3/Miniforge3-26.3.2-3-Linux-x86_64.sh
+    sha256: 848194851a98903134187fbb4ab50efe87b003e0c0f808f97644b7524a62bf2c
+  hmmer:
+    component: shared
+    version: "3.4"
+    url: http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz
+    sha256: ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3
+  mmseqs:
+    component: shared
+    version: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f
+    release: 18-8cc5c
+    url: https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-gpu.tar.gz
+    sha256: 83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7
+  foldseek:
+    component: shared
+    version: 941cd33ff0771cd2e3f144e3293e22a2b87e9fda
+    release: 10-941cd33
+    url: https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-gpu.tar.gz
+    sha256: af7a688ffd8625b356c380380fb5650ec811262a2d18bdb0faeda95cc4894a55

@@ -254,12 +254,17 @@ class RuntimeSettings:
     gpu_busy_threshold_mib: int = 100
     geometry_max_workers: int = 4
     dockerfile: str = "docker/runtime/Dockerfile"
+    source_lock: str = "docker/runtime/sources.lock.yaml"
     af3_source_dir: str = "/home/structure/Software/alphafold3-3.0.3"
+    af3_source_commit: str = "7b197fe859790fc3e04d03ea70dd0b9ba48881c9"
     protenix_source_dir: str = "/home/structure/Software/Protenix-2.0.0"
+    protenix_source_commit: str = "2475421477ab414b571149ad4a875c390ff8a35d"
     opendde_source_dir: str = "/home/structure/Software/OpenDDE"
     opendde_source_commit: str = "266ce4c49d492ad1077866000d83704999985f46"
     esm_source_dir: str = "/home/structure/Software/esm"
     esm_source_commit: str = "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+    openfold_source_dir: str = "/home/structure/Software/esm/openfold-2.2.0"
+    openfold_source_commit: str = "e938c184a291bf053af3b14c1e3e8bb29aee57e2"
     allow_dirty_source_trees: bool = False
     mmseqs_release: str = "18-8cc5c"
     mmseqs_version: str = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
