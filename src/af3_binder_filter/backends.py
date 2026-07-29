@@ -1073,6 +1073,7 @@ def build_runtime_image_command(
     source_lock_sha256 = source_lock.sha256 if declared_source_lock is not None else "unavailable"
     uv_component_sha256 = "unavailable"
     conda_component_sha256 = "unavailable"
+    shared_component_sha256 = "unavailable"
     if declared_source_lock is not None:
         uv_component_sha256 = source_lock.build_sha256(
             "uv",
@@ -1083,6 +1084,10 @@ def build_runtime_image_command(
             "conda",
             recipe_sha256=runtime_recipe_sha256(dockerfile, "conda"),
             dependency_lock_sha256=runtime_dependency_lock_sha256(lock_root, "conda"),
+        )
+        shared_component_sha256 = source_lock.build_sha256(
+            "shared",
+            recipe_sha256=runtime_recipe_sha256(dockerfile, "shared"),
         )
     uv_artifact = source_lock.artifacts["uv"]
     miniforge_artifact = source_lock.artifacts["miniforge"]
@@ -1163,6 +1168,8 @@ def build_runtime_image_command(
             f"UV_COMPONENT_SHA256={uv_component_sha256}",
             "--build-arg",
             f"CONDA_COMPONENT_SHA256={conda_component_sha256}",
+            "--build-arg",
+            f"SHARED_COMPONENT_SHA256={shared_component_sha256}",
             "--build-arg",
             "RUNTIME_SOURCE_BUNDLE_SHA256="
             + (verified_bundle.bundle_sha256 if verified_bundle else "unavailable"),

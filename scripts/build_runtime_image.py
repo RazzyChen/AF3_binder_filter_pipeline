@@ -14,6 +14,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from af3_binder_filter.backends import BackendError, build_runtime_image_command  # noqa: E402
 from af3_binder_filter.config import ConfigError, compose_hydra_config  # noqa: E402
+from af3_binder_filter.runtime_sources import (  # noqa: E402
+    RuntimeSourceLockError,
+    apply_source_lock_to_config,
+    load_runtime_source_lock,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -60,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             overrides=args.override,
         )
+        dockerfile = Path(config.runtime.dockerfile).expanduser().resolve()
+        source_lock_path = Path(config.runtime.source_lock).expanduser()
+        if not source_lock_path.is_absolute():
+            source_lock_path = dockerfile.parents[2] / source_lock_path
+        apply_source_lock_to_config(config, load_runtime_source_lock(source_lock_path))
         if args.image:
             config.backend.image = args.image
         if args.cache_dir:
@@ -82,7 +92,13 @@ def main(argv: list[str] | None = None) -> int:
             raise BackendError(
                 f"runtime image build failed with return code {completed.returncode}"
             )
-    except (BackendError, ConfigError, OSError, subprocess.SubprocessError) as exc:
+    except (
+        BackendError,
+        ConfigError,
+        OSError,
+        RuntimeSourceLockError,
+        subprocess.SubprocessError,
+    ) as exc:
         print(f"runtime image build error: {exc}", file=sys.stderr)
         return 2
     return 0

@@ -127,8 +127,10 @@ reviewer before deployment. External fork pull requests must never trigger the
 GPU workflow.
 
 Run Manual runtime build with scope uv, conda, or all. Missing component
-identities are built automatically; existing immutable component tags are
-reused. The final output is:
+identities are built automatically. An existing tag is reused only after its
+linux/amd64 config label matches the expected source/recipe/lock identity; any
+mismatch fails the build. Assembly uses the validated OCI digest, not the
+mutable tag. The final output is:
 
     ghcr.io/<owner>/aerith-fold-runtime:candidate-<run-id>
     ghcr.io/<owner>/aerith-fold-runtime:candidate
@@ -141,7 +143,7 @@ digest resolved and tested by the smoke job.
 
 Release candidates record the complete dependency lock, full recipe, source
 lock, source bundle, per-source tree hashes, component build identities, actual
-UV and Conda image digests, Ubuntu snapshot, and clean-source state.
+UV, Conda, and runtime-base image digests, Ubuntu snapshot, and clean-source state.
 
 Verify a pulled candidate and then run the container doctor:
 

@@ -21,6 +21,7 @@ PROVENANCE_SHA256_LABELS = (
     "org.aerith.runtime.source-bundle.sha256",
     "org.aerith.runtime.component.uv.sha256",
     "org.aerith.runtime.component.conda.sha256",
+    "org.aerith.runtime.component.shared.sha256",
     "org.aerith.runtime.source.af3.sha256",
     "org.aerith.runtime.source.protenix.sha256",
     "org.aerith.runtime.source.opendde.sha256",
@@ -32,6 +33,7 @@ UBUNTU_SNAPSHOT_LABEL = "org.aerith.runtime.ubuntu-snapshot"
 COMPONENT_IMAGE_DIGEST_LABELS = (
     "org.aerith.runtime.component.uv.image-digest",
     "org.aerith.runtime.component.conda.image-digest",
+    "org.aerith.runtime.component.runtime-base.image-digest",
 )
 
 

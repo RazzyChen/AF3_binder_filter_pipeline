@@ -94,6 +94,12 @@ jobs:
           fi
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           requested_image="${REQUESTED_IMAGE:-ghcr.io/$owner/aerith-fold-runtime:candidate}"
+          expected_repository="ghcr.io/$owner/aerith-fold-runtime"
+          if [[ "$requested_image" != "$expected_repository:"* \
+            && "$requested_image" != "$expected_repository@"* ]]; then
+            echo "GPU smoke only accepts candidates from $expected_repository" >&2
+            exit 2
+          fi
           digest="$(docker buildx imagetools inspect "$requested_image" \
             | sed -n "s/^Digest:[[:space:]]*//p" | head -n 1)"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then

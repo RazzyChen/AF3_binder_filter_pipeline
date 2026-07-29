@@ -158,6 +158,8 @@ RUN /opt/envs/af3/bin/python -c 'import alphafold3' \
 # Content-only OCI component. It is safe to publish independently and can be
 # consumed by the assembly Dockerfile without carrying the compiler layers.
 FROM scratch AS uv-component
+ARG UV_COMPONENT_SHA256=unavailable
+LABEL org.aerith.runtime.component.uv.sha256="${UV_COMPONENT_SHA256}"
 COPY --from=uv-builder /opt/envs /opt/envs
 COPY --from=uv-builder /opt/uv-python /opt/uv-python
 COPY --from=uv-builder /opt/apps/alphafold3 /opt/apps/alphafold3
@@ -211,6 +213,8 @@ RUN /opt/conda/bin/conda run -n protenix protenix --help >/dev/null \
     && find /opt/apps -type f \( -name '*.pyc' -o -name '.DS_Store' \) -delete
 
 FROM scratch AS conda-component
+ARG CONDA_COMPONENT_SHA256=unavailable
+LABEL org.aerith.runtime.component.conda.sha256="${CONDA_COMPONENT_SHA256}"
 COPY --from=conda-builder /opt/conda /opt/conda
 COPY --from=conda-builder /opt/apps/protenix /opt/apps/protenix
 COPY --from=conda-builder /opt/apps/esm /opt/apps/esm
@@ -221,6 +225,9 @@ FROM ${CUDA_BASE} AS runtime-base
 ARG UBUNTU_SNAPSHOT
 ARG MMSEQS_VERSION=8cc5ce367b5638c4306c2d7cfc652dd099a4643f
 ARG FOLDSEEK_VERSION=941cd33ff0771cd2e3f144e3293e22a2b87e9fda
+ARG SHARED_COMPONENT_SHA256=unavailable
+
+LABEL org.aerith.runtime.component.shared.sha256="${SHARED_COMPONENT_SHA256}"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -299,8 +306,10 @@ ARG RUNTIME_SOURCE_BUNDLE_SHA256=unavailable
 ARG RUNTIME_SOURCE_DIRTY=unavailable
 ARG UV_COMPONENT_SHA256=unavailable
 ARG CONDA_COMPONENT_SHA256=unavailable
+ARG SHARED_COMPONENT_SHA256=unavailable
 ARG UV_COMPONENT_IMAGE_DIGEST=unavailable
 ARG CONDA_COMPONENT_IMAGE_DIGEST=unavailable
+ARG RUNTIME_BASE_IMAGE_DIGEST=unavailable
 ARG AF3_SOURCE_SHA256=unavailable
 ARG PROTENIX_SOURCE_SHA256=unavailable
 ARG OPENDDE_SOURCE_SHA256=unavailable
@@ -326,8 +335,10 @@ LABEL org.opencontainers.image.title="Aerith unified fold runtime" \
       org.aerith.runtime.source.dirty="${RUNTIME_SOURCE_DIRTY}" \
       org.aerith.runtime.component.uv.sha256="${UV_COMPONENT_SHA256}" \
       org.aerith.runtime.component.conda.sha256="${CONDA_COMPONENT_SHA256}" \
+      org.aerith.runtime.component.shared.sha256="${SHARED_COMPONENT_SHA256}" \
       org.aerith.runtime.component.uv.image-digest="${UV_COMPONENT_IMAGE_DIGEST}" \
       org.aerith.runtime.component.conda.image-digest="${CONDA_COMPONENT_IMAGE_DIGEST}" \
+      org.aerith.runtime.component.runtime-base.image-digest="${RUNTIME_BASE_IMAGE_DIGEST}" \
       org.aerith.runtime.source.af3.sha256="${AF3_SOURCE_SHA256}" \
       org.aerith.runtime.source.protenix.sha256="${PROTENIX_SOURCE_SHA256}" \
       org.aerith.runtime.source.opendde.sha256="${OPENDDE_SOURCE_SHA256}" \

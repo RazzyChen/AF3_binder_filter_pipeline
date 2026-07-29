@@ -165,6 +165,7 @@ def test_build_command_verifies_bundle_and_records_source_provenance(
     for name in bundle.context_paths:
         assert f"{name}={bundle.context_paths[name]}" in command
     assert "RUNTIME_RECIPE_SHA256=" in joined
+    assert "SHARED_COMPONENT_SHA256=" in joined
 
     config.runtime.opendde_source_commit = "different"
     with pytest.raises(BackendError, match="opendde-src commit mismatch"):
@@ -277,15 +278,19 @@ def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     assert "COPY --from=opendde-src" in uv_builder
     assert "protenix-src" not in uv_builder
     assert "COPY --from=uv-builder /opt/envs /opt/envs" in uv_component
+    assert "org.aerith.runtime.component.uv.sha256" in uv_component
     assert "COPY --from=protenix-src" in conda_builder
     assert "COPY --from=esm-src" in conda_builder
     assert "COPY --from=openfold-src" in conda_builder
     assert "opendde-src" not in conda_builder
     assert "COPY --from=conda-builder /opt/conda /opt/conda" in conda_component
+    assert "org.aerith.runtime.component.conda.sha256" in conda_component
     assert "cuda-nvcc-12-6" not in runtime_base
     assert "COPY --from=tool-builder /opt/mmseqs /opt/mmseqs" in runtime_base
+    assert "org.aerith.runtime.component.shared.sha256" in runtime_base
     assert "COPY --from=uv-component /opt/envs /opt/envs" in final
     assert "COPY --from=conda-component /opt/conda /opt/conda" in final
+    assert "org.aerith.runtime.component.runtime-base.image-digest" in final
     assert "rm -f /opt/conda/envs/esm/bin/nvcc" in final
     assert 'ENTRYPOINT ["/usr/local/bin/fold-runtime"]' in runtime_base
     assert 'org.aerith.runtime.source-lock.sha256="${RUNTIME_SOURCE_LOCK_SHA256}"' in final
@@ -315,6 +320,8 @@ def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     assert "FROM ${RUNTIME_BASE_IMAGE} AS fold-runtime" in assembly
     assert "COPY --from=uv-component /opt/envs /opt/envs" in assembly
     assert "COPY --from=conda-component /opt/conda /opt/conda" in assembly
+    assert "org.aerith.runtime.component.shared.sha256" in assembly
+    assert "org.aerith.runtime.component.runtime-base.image-digest" in assembly
 
 
 _EXPORTER = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "export_runtime_image.py"))
@@ -355,8 +362,10 @@ def test_runtime_image_verifier_accepts_clean_release_provenance() -> None:
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.shared.sha256": "e" * 64,
         "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
         "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
+        "org.aerith.runtime.component.runtime-base.image-digest": "sha256:" + "e" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -396,8 +405,10 @@ def test_production_export_rejects_missing_ubuntu_snapshot(tmp_path: Path) -> No
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.shared.sha256": "e" * 64,
         "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
         "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
+        "org.aerith.runtime.component.runtime-base.image-digest": "sha256:" + "e" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -426,8 +437,10 @@ def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> No
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.shared.sha256": "e" * 64,
         "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
         "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
+        "org.aerith.runtime.component.runtime-base.image-digest": "sha256:" + "e" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -460,8 +473,10 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.shared.sha256": "e" * 64,
         "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
         "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
+        "org.aerith.runtime.component.runtime-base.image-digest": "sha256:" + "e" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,

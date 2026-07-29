@@ -38,7 +38,7 @@ sources:
     tree_sha256: 4be5089528cb87222e60e10bf61f47032ba6bb6875e4750457b9aa1988af1f5b
     patches:
       - path: docker/runtime/patches/esm-openfold2-state-dict.patch
-        sha256: 773ea83000bf737516bd1a9dc340dbcb7f4da03122a024d818822db2ebfb9013
+        sha256: 49aa657c53f59c6a77c3cbb7249ef40ee3ffddeda466bfcdc0952b9d8a9ca428
   openfold:
     component: conda
     context: openfold-src

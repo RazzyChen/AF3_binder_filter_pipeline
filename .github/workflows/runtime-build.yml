@@ -107,6 +107,39 @@ jobs:
           image_exists() {
             docker buildx imagetools inspect "$1" >/dev/null 2>&1
           }
+          validate_component() {
+            local image="$1" label="$2" expected="$3" payload actual
+            payload="$(docker buildx imagetools inspect "$image" --format "{{json .}}")"
+            actual="$(jq -r --arg key "$label" '
+              if (.image | has("config")) then
+                .image.config.Labels[$key] // empty
+              else
+                .image["linux/amd64"].config.Labels[$key] // empty
+              end
+            ' <<< "$payload")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "component identity mismatch for $image: expected $expected, found ${actual:-missing}" >&2
+              return 2
+            fi
+          }
+          uv_exists=false
+          conda_exists=false
+          base_exists=false
+          if image_exists "$uv_image"; then
+            validate_component "$uv_image" \
+              org.aerith.runtime.component.uv.sha256 "$UV_BUILD_SHA256"
+            uv_exists=true
+          fi
+          if image_exists "$conda_image"; then
+            validate_component "$conda_image" \
+              org.aerith.runtime.component.conda.sha256 "$CONDA_BUILD_SHA256"
+            conda_exists=true
+          fi
+          if image_exists "$base_image"; then
+            validate_component "$base_image" \
+              org.aerith.runtime.component.shared.sha256 "$BASE_BUILD_SHA256"
+            base_exists=true
+          fi
           build_uv=false
           build_conda=false
           build_base=false
@@ -116,9 +149,9 @@ jobs:
             conda) build_conda=true ;;
             *) echo "unsupported scope: $BUILD_SCOPE" >&2; exit 2 ;;
           esac
-          image_exists "$uv_image" || build_uv=true
-          image_exists "$conda_image" || build_conda=true
-          image_exists "$base_image" || build_base=true
+          [[ "$uv_exists" == true ]] || build_uv=true
+          [[ "$conda_exists" == true ]] || build_conda=true
+          [[ "$base_exists" == true ]] || build_base=true
 
           pids=()
           names=()
@@ -153,6 +186,12 @@ jobs:
             fi
           done
           (( failed == 0 ))
+          validate_component "$uv_image" \
+            org.aerith.runtime.component.uv.sha256 "$UV_BUILD_SHA256"
+          validate_component "$conda_image" \
+            org.aerith.runtime.component.conda.sha256 "$CONDA_BUILD_SHA256"
+          validate_component "$base_image" \
+            org.aerith.runtime.component.shared.sha256 "$BASE_BUILD_SHA256"
           echo "uv_image=$uv_image" >> "$GITHUB_OUTPUT"
           echo "conda_image=$conda_image" >> "$GITHUB_OUTPUT"
           echo "base_image=$base_image" >> "$GITHUB_OUTPUT"
@@ -170,6 +209,7 @@ jobs:
           DEPENDENCY_LOCK_SHA256: ${{ steps.metadata.outputs.dependency_lock_sha256 }}
           UV_BUILD_SHA256: ${{ steps.metadata.outputs.uv_build_sha256 }}
           CONDA_BUILD_SHA256: ${{ steps.metadata.outputs.conda_build_sha256 }}
+          BASE_BUILD_SHA256: ${{ steps.metadata.outputs.runtime_base_build_sha256 }}
           BUNDLE_SHA256: ${{ steps.metadata.outputs.bundle_sha256 }}
         run: |
           set -euo pipefail
@@ -217,8 +257,10 @@ jobs:
             --build-arg RUNTIME_SOURCE_DIRTY=false \
             --build-arg "UV_COMPONENT_SHA256=$UV_BUILD_SHA256" \
             --build-arg "CONDA_COMPONENT_SHA256=$CONDA_BUILD_SHA256" \
+            --build-arg "SHARED_COMPONENT_SHA256=$BASE_BUILD_SHA256" \
             --build-arg "UV_COMPONENT_IMAGE_DIGEST=$uv_digest" \
             --build-arg "CONDA_COMPONENT_IMAGE_DIGEST=$conda_digest" \
+            --build-arg "RUNTIME_BASE_IMAGE_DIGEST=$base_digest" \
             --build-arg "AF3_SOURCE_SHA256=$(jq -r .contexts.\"af3-src\".sha256 "$manifest")" \
             --build-arg "PROTENIX_SOURCE_SHA256=$(jq -r .contexts.\"protenix-src\".sha256 "$manifest")" \
             --build-arg "OPENDDE_SOURCE_SHA256=$(jq -r .contexts.\"opendde-src\".sha256 "$manifest")" \

@@ -504,6 +504,12 @@ GitHub-hosted runner prepares the bundle and controls an amd64 remote BuildKit
 daemon over mutual TLS. BuildKit publishes independently content-addressed
 `uv-component`, `conda-component`, and `runtime-base` images to private
 GHCR, reuses registry cache layers, and builds missing targets in parallel.
+
+An existing component tag is a cache candidate, not a trust assertion. Before
+reuse, the workflow reads its linux/amd64 image config and requires the embedded
+component identity to equal the expected source/recipe/lock hash; a mismatch is
+a hard failure. Assembly then pins the validated registry digest.
+
 `Dockerfile.assemble` then combines their exact registry digests into:
 
 ```text
@@ -515,8 +521,8 @@ The run-specific tag is the auditable handoff to GPU smoke; the second tag is a
 human convenience alias. The workflow never writes `latest` or a release tag.
 
 Candidate labels contain the full runtime lock, complete recipe, source lock,
-source bundle, per-source tree hashes, component build identities, actual UV
-and Conda OCI digests, Ubuntu snapshot, and clean-source status. A missing or
+source bundle, per-source tree hashes, component build identities, actual UV,
+Conda, and runtime-base OCI digests, Ubuntu snapshot, and clean-source status. A missing or
 dirty value is rejected by `scripts/verify_runtime_image.py`.
 
 The runtime recipe resolves Ubuntu packages from the immutable

@@ -19,6 +19,8 @@ def test_cpu_ci_uses_locked_dependencies_and_real_python_matrix() -> None:
     assert "ruff check ." in workflow
     assert "deptry --config pyproject.toml ." in workflow
     assert "scripts/runtime_sources.py validate" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "git diff --check" in workflow
 
 
 def test_docker_contract_is_hosted_static_validation_only() -> None:
@@ -50,9 +52,13 @@ def test_runtime_build_is_manual_remote_private_and_component_staged() -> None:
     assert "conda-component" in workflow
     assert "runtime-base" in workflow
     assert "pids=()" in workflow
+    assert "validate_component()" in workflow
+    assert "component identity mismatch" in workflow
+    assert "org.aerith.runtime.component.shared.sha256" in workflow
     assert "Dockerfile.assemble" in workflow
     assert "UV_COMPONENT_IMAGE_DIGEST" in workflow
     assert "CONDA_COMPONENT_IMAGE_DIGEST" in workflow
+    assert "RUNTIME_BASE_IMAGE_DIGEST" in workflow
     assert "candidate-${GITHUB_RUN_ID}" in workflow
     assert "aerith-fold-runtime:latest" not in workflow
 
@@ -68,6 +74,7 @@ def test_gpu_smoke_requires_exclusive_host_and_promotes_tested_digest() -> None:
     assert "flock -n 9" in workflow
     assert "--network none" in workflow
     assert "scripts/verify_runtime_image.py" in workflow
+    assert "GPU smoke only accepts candidates from" in workflow
     assert "pytest -q -m integration tests/test_gpu_smoke_contract.py" in workflow
     assert "environment: runtime-release" in workflow
     assert workflow.index("scripts/verify_runtime_image.py") < workflow.index(
