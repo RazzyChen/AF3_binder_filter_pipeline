@@ -57,7 +57,8 @@ Aerith 是蛋白 Binder 筛选的控制面和调度器，不是新的结构预�
 - `interface.py`、`rosetta.py`：界面几何与能量分析。
 - `esm_tools.py`、`consensus.py`、`clustering.py`：ESM、跨后端共识和三层聚类。
 - `reporting.py`、`output_layout.py`、`progress.py`：公开 CSV、分阶段目录和 CLI 进度。
-- `docker/runtime/`：统一 runtime Dockerfile、entrypoint 和依赖 locks。
+- `docker/runtime/`：统一 runtime Dockerfile、digest assembly、依赖 locks 和
+  `sources.lock.yaml`；远端源码必须由完整 commit 与 tree hash 锁定。
 - `docker/feature-builder/`：GPU MMseqs2/template 预处理 adapter。
 
 ## 生产与已退役边界
@@ -106,11 +107,18 @@ docker run --rm --gpus all --network none aerith/fold-runtime:local doctor
 建议当前保持：
 
 ```text
-GitHub Actions（CPU CI / 镜像发布 / 手动 GPU smoke）
-    -> 专用 self-hosted runner（一次独占整台 GPU 主机）
-        -> Aerith
-            -> GPU-isolated Docker containers
+GitHub Actions（CPU CI / Docker contract / 手动构建控制）
+    -> mTLS remote BuildKit（持久化 SSD layer cache）
+        -> private GHCR candidate（UV / Conda / runtime-base digest assembly）
+            -> 专用 self-hosted GPU runner（一次独占整台 GPU 主机）
+                -> Aerith -> GPU-isolated Docker containers
 ```
+
+重型 `runtime-build.yml` 只能手动触发，不得在普通 push、PR 或 schedule 自动构建；
+UV 与 Conda component 使用独立的 source/recipe/dependency-lock identity。候选镜像不得直接
+写入 `latest` 或 release tag；只有 GPU smoke 通过并经过受保护的
+`runtime-release` environment 审批后，才能把同一个已测试 OCI digest 晋级为 release tag
+与 `stable`。
 
 只有满足以下条件时才评估 K8s：多物理 GPU 节点、多人共享队列、需要自动扩缩容/故障重调度、
 已有长期维护的 Kubernetes 平台，或 Aerith 需要成为常驻 API 服务。进入 K8s 前先抽象

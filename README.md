@@ -25,7 +25,7 @@ Run commands from the repository root:
 ```bash
 git switch Dev
 uv venv --prompt aerith .venv
-uv sync
+uv sync --locked
 source .venv/bin/activate
 
 aerith config create \
@@ -404,22 +404,33 @@ messages `cache hit!` or `cache missing!`.
 
 ## Unified runtime image
 
+The detailed build and release runbook is
+[docker/runtime/README.md](docker/runtime/README.md).
+
 The image recipe is `docker/runtime/Dockerfile`. It contains isolated AF3 and
 OpenDDE uv environments, Protenix and ESM conda environments, and pinned GPU
 MMseqs2/Foldseek releases. Checkpoints and `/data/AF3_database` are mounted at
 runtime and are not baked into image layers.
 
-The recipe has a `builder` and a final `runtime` stage. CUDA development
-packages and both fused layer-normalization compilations remain in `builder`.
-The final image keeps the four isolated model environments, GPU MMseqs2,
-Foldseek, patched HMMER, and the AF3 `ptxas` helper, but removes system `nvcc`
-and the ESM OpenFold compiler payload. OpenDDE and Protenix fused layer norm are
-precompiled during the build and verified by `fold-runtime doctor`; the default
-runtime setting is `LAYERNORM_TYPE=fast_layernorm`.
+The tracked source authority is `docker/runtime/sources.lock.yaml`. It pins
+full commits and canonical Git tree hashes for AF3, Protenix, OpenDDE, ESM, and
+OpenFold, plus checksums for all downloaded build tools. The multi-stage recipe
+publishes three independent targets:
+
+- `uv-component`: AF3 and OpenDDE;
+- `conda-component`: Protenix, ESM, and OpenFold;
+- `runtime-base`: GPU MMseqs2, GPU Foldseek, HMMER, Kalign, the dispatcher,
+  and feature adapters.
+
+The UV, Conda, and shared targets have independent source, recipe, and lock
+identities. UV and Conda can build concurrently without installing into one
+another. `docker/runtime/Dockerfile.assemble` combines exact component OCI
+digests into the candidate. CUDA compilers remain in builder layers; the final
+image retains only required runtime helpers and precompiled extensions.
 
 ### Local development build
 
-The Dockerfile requires four named source contexts. A direct BuildKit command
+The Dockerfile requires five named source contexts. A direct BuildKit command
 from the repository root is:
 
 ```bash
@@ -428,18 +439,19 @@ docker build \
   --build-context protenix-src=/home/structure/Software/Protenix-2.0.0 \
   --build-context opendde-src=/home/structure/Software/OpenDDE \
   --build-context esm-src=/home/structure/Software/esm \
+  --build-context openfold-src=/home/structure/Software/openfold \
   --file docker/runtime/Dockerfile \
   --tag aerith/fold-runtime:local \
   .
 ```
 
 This direct command is useful for development diagnosis only: it bypasses the
-source-bundle provenance gate. Use `docker build --check` with the same named
-contexts for a fast static recipe check, then use the Aerith wrapper for a
-reproducible build.
+locked GitHub checkout gate. Use `docker build --check` with the same named
+contexts for a fast static recipe check.
 
-For normal local builds, use the Aerith wrapper so configured source revisions,
-MMseqs2/Foldseek archives, and build contexts are validated before Docker runs:
+For normal local builds, use the Aerith wrapper. It validates the immutable
+source lock, prepares the five filtered contexts, and checks all artifact
+hashes before Docker runs:
 
 ```bash
 aerith config validate --config config.yaml
@@ -450,6 +462,9 @@ docker image inspect aerith/fold-runtime:local
 docker run --rm --gpus all --network none \
   aerith/fold-runtime:local doctor
 ```
+
+The all-in-one local result is a development image. Release candidates require
+the separately published UV and Conda component digests described below.
 
 Docker image placement is controlled by the Docker daemon, not by this
 Dockerfile. To keep layers on an SSD, configure Docker's data root once and
@@ -466,81 +481,58 @@ daemon settings. Moving individual image directories by hand is unsupported;
 export with Aerith, change the daemon data root, then reload the verified image
 when migration is required.
 
-### Release build from a verified source bundle
+### Release source and component build
 
-Production/disaster-recovery builds should first freeze the four filtered
-source contexts. The bundle is a directory with a manifest and content hashes;
-creating it does not modify the source trees.
+Release builds start from the repository-tracked source lock, not mutable host
+source directories:
 
 ```bash
-BUNDLE=/data/aerith/runtime-sources/release-YYYYMMDD
+uv run python scripts/runtime_sources.py validate
+uv run python scripts/runtime_sources.py metadata
 
-uv run python scripts/snapshot_runtime_sources.py create \
-  --config config.yaml \
-  --output "$BUNDLE"
-
-uv run python scripts/snapshot_runtime_sources.py verify "$BUNDLE"
-
-uv run python scripts/build_runtime_image.py \
-  --config config.yaml \
-  --source-bundle "$BUNDLE" \
-  --dry-run
-
-uv run python scripts/build_runtime_image.py \
-  --config config.yaml \
-  --source-bundle "$BUNDLE"
+BUNDLE=/ssd/aerith-build/runtime-sources
+uv run python scripts/runtime_sources.py prepare --output "$BUNDLE"
 ```
 
-The release builder verifies the bundle before constructing BuildKit contexts.
-Release-grade source, recipe, lock hashes, and the fixed Ubuntu repository
-snapshot are written into image labels and checked by the export tool.
+The bundle contains five filtered contexts and an atomic manifest. Every remote
+commit and canonical tree hash is verified before checksum-locked patches are
+applied. The manifest records the source lock, resulting context hashes, clean
+Git state, and bundle identity.
 
-A source bundle also records each source Git head and dirty status. The build
-command rechecks the OpenDDE and ESM heads against the configured pinned commits
-before passing contexts to Docker. By default a dirty Git source tree is
-rejected. Only for an intentional, locally auditable experiment may you set:
+The supported release path is the manual `runtime-build.yml` workflow. A
+GitHub-hosted runner prepares the bundle and controls an amd64 remote BuildKit
+daemon over mutual TLS. BuildKit publishes independently content-addressed
+`uv-component`, `conda-component`, and `runtime-base` images to private
+GHCR, reuses registry cache layers, and builds missing targets in parallel.
+`Dockerfile.assemble` then combines their exact registry digests into:
+
+```text
+ghcr.io/<owner>/aerith-fold-runtime:candidate-<run-id>
+ghcr.io/<owner>/aerith-fold-runtime:candidate
+```
+
+The run-specific tag is the auditable handoff to GPU smoke; the second tag is a
+human convenience alias. The workflow never writes `latest` or a release tag.
+
+Candidate labels contain the full runtime lock, complete recipe, source lock,
+source bundle, per-source tree hashes, component build identities, actual UV
+and Conda OCI digests, Ubuntu snapshot, and clean-source status. A missing or
+dirty value is rejected by `scripts/verify_runtime_image.py`.
+
+The runtime recipe resolves Ubuntu packages from the immutable
+`snapshot.ubuntu.com/ubuntu/20260723T000000Z` state. Updating that snapshot,
+any pinned source, dependency lock, patch, or relevant Docker stage creates a
+new component identity. An isolated UV change does not invalidate the Conda
+component identity, and vice versa.
+
+Local dirty-source overrides remain available only for explicit experiments:
 
 ```yaml
 runtime:
   allow_dirty_source_trees: true
 ```
 
-That exception is recorded in the bundle manifest; it does not make an
-uncommitted upstream tree release-grade. A dirty bundle is accepted for a build
-only while the same explicit override is active. Its image is labelled
-`org.aerith.runtime.source.dirty=true`, and the release exporter rejects it
-unless `--allow-unprovenanced` is also explicit.
-
-The build script accepts `--image` for an explicit candidate tag and
-`--cache-dir /ssd/aerith-buildkit-cache`; it only imports a local BuildKit cache
-after that cache has a valid `index.json`. Local cache export requires a named
-`docker-container` Buildx builder, for example:
-
-```bash
-docker buildx create --name aerith-runtime-ci --driver docker-container --use
-
-uv run python scripts/build_runtime_image.py \
-  --config config.yaml \
-  --source-bundle "$BUNDLE" \
-  --cache-dir /ssd/aerith-buildkit-cache \
-  --builder aerith-runtime-ci
-```
-
-The runtime recipe resolves Ubuntu packages from the immutable
-`snapshot.ubuntu.com/ubuntu/20260723T000000Z` repository state. Rebuilds do not
-silently consume newer archive or security packages; updating the snapshot is an
-explicit recipe change that requires a new image and validation run.
-The builder, CUDA compiler install, and final runtime apt transactions share
-locked BuildKit cache mounts, so indexes and common package archives are fetched
-once across those stages. Completed package archives can also be reused by a
-later retry without becoming image layers; APT still revalidates repository
-indexes after an interrupted transaction.
-
-With an explicit builder, the wrapper passes `--load` so the candidate is
-available to `docker image inspect`, `docker run`, and the GPU smoke workflow.
-
-The self-hosted workflow verifies an existing named builder has that exact
-driver and fails preflight instead of silently reusing an incompatible builder.
+They are recorded as dirty and cannot pass release verification or promotion.
 
 ### Export and restore
 
@@ -549,7 +541,7 @@ it never uses `docker export`:
 
 ```bash
 uv run python scripts/export_runtime_image.py \
-  --image aerith/fold-runtime:local \
+  --image ghcr.io/<owner>/aerith-fold-runtime@sha256:<digest> \
   --output-dir /ssd/aerith_images
 ```
 
@@ -568,10 +560,10 @@ zstd --decompress --stdout <archive>.docker.tar.zst | docker image load
 docker image inspect <immutable-tag-printed-by-export>
 ```
 
-By default export refuses images with missing provenance labels or dirty source
-provenance. `--allow-unprovenanced` exists only for explicitly acknowledged
-historical or non-release experimental images and must not be described as a
-reproducible release.
+By default export refuses local all-in-one builds, images with missing
+provenance labels, or dirty source provenance. `--allow-unprovenanced` exists
+only for explicitly acknowledged historical or non-release experimental images
+and must not be described as a reproducible release.
 
 This documentation does not claim that a particular local image has already
 been exported or GPU-smoke-tested. Record those facts only after the archive,
@@ -598,59 +590,74 @@ docker run --rm --gpus all --network none \
 ```
 
 Real GPU acceptance begins with one controlled Binder. Full production screens
-must not run automatically in ordinary pull-request CI. The recommended
-delivery topology is GitHub Actions for CPU checks and image publication plus a
-dedicated self-hosted runner that gives Aerith exclusive access to the GPU
-host.
+must not run automatically in ordinary pull-request CI.
 
-## CI/CD and self-hosted runners
+## CI/CD and runtime delivery
 
 `.github/workflows/ci.yml` is the required CPU gate for every push and pull
-request. It creates the locked uv environment, runs Ruff and Deptry, compiles
-all tracked Python, and executes `pytest -m "not integration"` independently on
-Python 3.11 and 3.12. Protect `main` (and, while it is the integration line,
-`Dev`) with the `Quality` and both `Unit tests` checks.
+request. It creates the locked uv environment, runs Ruff and Deptry, validates
+the source lock, compiles all tracked Python, and executes
+`pytest -m "not integration"` independently on Python 3.11 and 3.12. Protect
+`main` and `Dev` with `Quality` and both `Unit tests` checks.
 
-The heavy workflows deliberately use a dedicated lab runner, not GitHub-hosted
-storage and not Kubernetes:
+`docker-contract.yml` is also GitHub-hosted and runs only when runtime-related
+files change. It validates source/build identities and executes `docker build
+--check` for both Dockerfiles. It never performs a heavy build or pushes an
+image, so it remains a suitable pull-request gate.
 
-- `docker-build.yml` runs on `self-hosted, linux, x64, aerith-build` when the
-  runtime recipe changes, weekly, or by manual dispatch. It does not request a
-  GPU. It builds a provenance-labelled candidate from a verified source bundle
-  and keeps its BuildKit cache on the local SSD.
-- `gpu-smoke.yml` runs only manually or weekly on
-  `self-hosted, linux, x64, aerith-gpu`; it has no `push` or `pull_request`
-  trigger. A shared GitHub concurrency group plus an OS file lock prevents it
-  from overlapping image builds or another smoke run. It refuses a host with
-  active GPU compute processes, verifies release provenance labels, runs `doctor`
-  with `--network none`, then runs
-  AF3+OpenDDE and AF3+Protenix serially.
-
-Configure these repository variables on the self-hosted machine; all point to
-external paths and must never be committed:
+`runtime-build.yml` is a manual GitHub workflow. The hosted runner is the
+authenticated controller; heavy layers are built by a remote BuildKit daemon
+with persistent SSD storage. Configure these repository secrets:
 
 ```text
-AERITH_RUNTIME_SOURCE_BUNDLE=/data/aerith/runtime-sources/release-YYYYMMDD
-AERITH_RUNTIME_BUILD_CONFIG=/ssd/aerith-ci/runtime-build.yaml
-AERITH_RUNTIME_BUILDKIT_CACHE_DIR=/ssd/aerith-buildkit-cache
-AERITH_RUNTIME_BUILD_LOCK=/ssd/aerith-ci/runtime-build.lock
+AERITH_BUILDKIT_ENDPOINT=tcp://buildkit.example.internal:1234
+AERITH_BUILDKIT_CA=<PEM certificate authority>
+AERITH_BUILDKIT_CERT=<PEM client certificate>
+AERITH_BUILDKIT_KEY=<PEM client private key>
+```
+
+The endpoint must require mutual TLS. The workflow logs into private GHCR with
+the repository `GITHUB_TOKEN`, uses private registry caches, and supports
+`all`, `uv`, or `conda` scope. Missing component identities are built
+automatically. UV, Conda, and runtime-base builds run in parallel when needed;
+the final candidate uses digest-pinned inputs. The workflow is not scheduled
+and is never triggered by a pull request or push.
+
+`gpu-smoke.yml` is manual-only on
+`self-hosted, linux, x64, aerith-gpu`. It cannot be triggered by an external
+fork. An OS lock prevents concurrent smoke runs, and the job refuses a host
+with active GPU compute PIDs. Configure:
+
+```text
 AERITH_GPU_SMOKE_CONFIG=/ssd/aerith-ci/golden/config.yaml
 AERITH_GPU_SMOKE_CONTRACT=/ssd/aerith-ci/golden/contract.json
 AERITH_GPU_SMOKE_ROOT=/ssd/aerith-ci/runs
 AERITH_GPU_SMOKE_LOCK=/ssd/aerith-ci/gpu-smoke.lock
 ```
 
-The build workflow tags `aerith/fold-runtime:ci-candidate` only in that host's
-Docker store. The GPU runner therefore normally shares the same host/data root;
-if it is a different host, export, checksum, load, and inspect the image first.
-A successful golden smoke additionally tags the immutable image as
-`aerith/fold-runtime:ci-last-known-good` locally.
+The job resolves the candidate to an immutable registry digest, pulls that
+digest, validates release provenance, runs `doctor` under `--network none`,
+then executes AF3+OpenDDE and/or AF3+Protenix serially. If promotion is
+requested, a separate GitHub-hosted job waits for approval in the protected
+`runtime-release` environment and publishes the exact tested digest as the
+requested release tag plus `stable`. No workflow writes `latest`.
 
 The golden contract is external JSON with a fixed `job_id`, required result
 columns, exact statuses, and scientifically chosen score ranges per secondary
 backend. `scripts/gpu_smoke.py` writes a per-run summary beside the external
 results and fails on any missing field, out-of-range metric, or nonzero pipeline
 exit. It is intentionally not a replacement for release review.
+
+The resulting topology is:
+
+```text
+GitHub-hosted CPU and Docker contract CI
+    -> manual GitHub controller -> remote private BuildKit -> private GHCR candidate
+        -> manual exclusive GPU runner -> protected digest promotion
+```
+
+This preserves GitHub auditability without making the production GPU host a
+general-purpose image builder and without introducing Kubernetes.
 
 ## Large external assets
 
