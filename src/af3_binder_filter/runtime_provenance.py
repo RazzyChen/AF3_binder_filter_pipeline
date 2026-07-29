@@ -19,6 +19,8 @@ PROVENANCE_SHA256_LABELS = (
     "org.aerith.runtime.recipe.sha256",
     "org.aerith.runtime.source-lock.sha256",
     "org.aerith.runtime.source-bundle.sha256",
+    "org.aerith.runtime.component.uv.sha256",
+    "org.aerith.runtime.component.conda.sha256",
     "org.aerith.runtime.source.af3.sha256",
     "org.aerith.runtime.source.protenix.sha256",
     "org.aerith.runtime.source.opendde.sha256",

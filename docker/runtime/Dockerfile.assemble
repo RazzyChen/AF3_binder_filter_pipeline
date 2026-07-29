@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+ARG RUNTIME_BASE_IMAGE=aerith/runtime-base:missing
+ARG UV_COMPONENT_IMAGE=aerith/uv-component:missing
+ARG CONDA_COMPONENT_IMAGE=aerith/conda-component:missing
+
+FROM ${UV_COMPONENT_IMAGE} AS uv-component
+FROM ${CONDA_COMPONENT_IMAGE} AS conda-component
+FROM ${RUNTIME_BASE_IMAGE} AS fold-runtime
+
+ARG UBUNTU_SNAPSHOT=20260723T000000Z
+ARG MMSEQS_VERSION=8cc5ce367b5638c4306c2d7cfc652dd099a4643f
+ARG MMSEQS_SHA256=83969dd5c7d4c32858c2fc9a4d1024c15e8fe5da768ce76e787ab0195ffd64e7
+ARG FOLDSEEK_VERSION=941cd33ff0771cd2e3f144e3293e22a2b87e9fda
+ARG FOLDSEEK_SHA256=af7a688ffd8625b356c380380fb5650ec811262a2d18bdb0faeda95cc4894a55
+
+COPY --from=uv-component /opt/envs /opt/envs
+COPY --from=uv-component /opt/uv-python /opt/uv-python
+COPY --from=uv-component /opt/apps/alphafold3 /opt/apps/alphafold3
+COPY --from=uv-component /opt/apps/opendde /opt/apps/opendde
+COPY --from=conda-component /opt/conda /opt/conda
+COPY --from=conda-component /opt/apps/protenix /opt/apps/protenix
+COPY --from=conda-component /opt/apps/esm /opt/apps/esm
+COPY --from=conda-component /opt/apps/openfold-2.2.0 /opt/apps/openfold-2.2.0
+
+RUN rm -f /opt/conda/envs/esm/bin/nvcc \
+      /opt/conda/envs/esm/bin/ptxas \
+      /opt/conda/envs/esm/bin/fatbinary \
+    && rm -rf /opt/conda/envs/esm/nvvm \
+    && rm -f /opt/conda/envs/esm/lib/libnvvm.so* \
+    && validate-fold-runtime "${MMSEQS_VERSION}" "${FOLDSEEK_VERSION}"
+
+ARG AF3_VERSION=3.0.3
+ARG PROTENIX_VERSION=2.0.0
+ARG AF3_COMMIT=7b197fe859790fc3e04d03ea70dd0b9ba48881c9
+ARG PROTENIX_COMMIT=2475421477ab414b571149ad4a875c390ff8a35d
+ARG OPENDDE_COMMIT=266ce4c49d492ad1077866000d83704999985f46
+ARG ESM_COMMIT=2b369911bb5b4b0dda914521b9475cad1656b2ac
+ARG OPENFOLD_COMMIT=e938c184a291bf053af3b14c1e3e8bb29aee57e2
+ARG RUNTIME_LOCK_SHA256=unavailable
+ARG RUNTIME_RECIPE_SHA256=unavailable
+ARG RUNTIME_SOURCE_LOCK_SHA256=unavailable
+ARG RUNTIME_SOURCE_BUNDLE_SHA256=unavailable
+ARG RUNTIME_SOURCE_DIRTY=unavailable
+ARG UV_COMPONENT_SHA256=unavailable
+ARG CONDA_COMPONENT_SHA256=unavailable
+ARG AF3_SOURCE_SHA256=unavailable
+ARG PROTENIX_SOURCE_SHA256=unavailable
+ARG OPENDDE_SOURCE_SHA256=unavailable
+ARG ESM_SOURCE_SHA256=unavailable
+ARG OPENFOLD_SOURCE_SHA256=unavailable
+LABEL org.opencontainers.image.title="Aerith unified fold runtime" \
+      org.opencontainers.image.base.digest="sha256:c87e78933f4c16e3272123bf2f75537306596d0fbaa395a29696a22786e5ee0e" \
+      org.aerith.runtime.ubuntu-snapshot="${UBUNTU_SNAPSHOT}" \
+      org.opencontainers.image.version="af3-${AF3_VERSION}_protenix-${PROTENIX_VERSION}" \
+      org.opencontainers.image.revision.af3="${AF3_COMMIT}" \
+      org.opencontainers.image.revision.protenix="${PROTENIX_COMMIT}" \
+      org.opencontainers.image.revision.opendde="${OPENDDE_COMMIT}" \
+      org.opencontainers.image.revision.esm="${ESM_COMMIT}" \
+      org.opencontainers.image.revision.openfold="${OPENFOLD_COMMIT}" \
+      org.opencontainers.image.revision.mmseqs="${MMSEQS_VERSION}" \
+      org.opencontainers.image.mmseqs.sha256="${MMSEQS_SHA256}" \
+      org.opencontainers.image.revision.foldseek="${FOLDSEEK_VERSION}" \
+      org.opencontainers.image.foldseek.sha256="${FOLDSEEK_SHA256}" \
+      org.opencontainers.image.runtime-lock.sha256="${RUNTIME_LOCK_SHA256}" \
+      org.aerith.runtime.recipe.sha256="${RUNTIME_RECIPE_SHA256}" \
+      org.aerith.runtime.source-lock.sha256="${RUNTIME_SOURCE_LOCK_SHA256}" \
+      org.aerith.runtime.source-bundle.sha256="${RUNTIME_SOURCE_BUNDLE_SHA256}" \
+      org.aerith.runtime.source.dirty="${RUNTIME_SOURCE_DIRTY}" \
+      org.aerith.runtime.component.uv.sha256="${UV_COMPONENT_SHA256}" \
+      org.aerith.runtime.component.conda.sha256="${CONDA_COMPONENT_SHA256}" \
+      org.aerith.runtime.source.af3.sha256="${AF3_SOURCE_SHA256}" \
+      org.aerith.runtime.source.protenix.sha256="${PROTENIX_SOURCE_SHA256}" \
+      org.aerith.runtime.source.opendde.sha256="${OPENDDE_SOURCE_SHA256}" \
+      org.aerith.runtime.source.esm.sha256="${ESM_SOURCE_SHA256}" \
+      org.aerith.runtime.source.openfold.sha256="${OPENFOLD_SOURCE_SHA256}"

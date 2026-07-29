@@ -48,7 +48,7 @@ sources:
     tree_sha256: 781bf6a2c225e471ae8223a59289dc4cc249b1d792fa0788210cc4a1dfd739fd
     patches:
       - path: docker/runtime/openfold-cuda-11.6.patch
-        sha256: ff14379334deab39bb66be35451dec8584ed55c038c488b6cfe7d6e76857dbf8
+        sha256: c47a992a8a0aed5310082dc3cb8d0fb5bad11ede360bad30b05c9af1edf90117
 
 artifacts:
   uv:

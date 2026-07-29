@@ -288,6 +288,31 @@ def _checkout_locked_source(source: LockedSource, destination: Path) -> None:
             source.commit,
         ]
     )
+    sparse_patterns = [
+        "/*",
+        "!/.github/",
+        "!/**/.venv/",
+        "!/**/__pycache__/",
+        "!/**/checkpoint/",
+        "!/**/ckpt/",
+        "!/**/output/",
+        "!/**/outputs/",
+        "!/**/test_outputs/",
+        "!/**/search_database/",
+        "!/**/examples/",
+        "!/**/tests/",
+        "!/**/test_data/",
+        "!/**/docs/",
+        "!/**/benchmarks/",
+        "!/**/assets/",
+        "!/**/build/",
+        "!/**/.pytest_cache/",
+    ]
+    if source.name == "opendde":
+        sparse_patterns.append("!/common/")
+    if source.name == "protenix":
+        sparse_patterns.append("!/scripts/msa/data/")
+    _run_git(["-C", str(destination), "sparse-checkout", "set", "--no-cone", *sparse_patterns])
     _run_git(["-C", str(destination), "checkout", "--quiet", "--detach", source.commit])
     completed = subprocess.run(
         ["git", "-C", str(destination), "rev-parse", "HEAD"],

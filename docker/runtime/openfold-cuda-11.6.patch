@@ -1,5 +1,10 @@
+diff --git a/setup.py b/setup.py
 --- a/setup.py
 +++ b/setup.py
-@@ -57 +57 @@
+@@ -54,5 +54,5 @@ def get_cuda_bare_metal_version(cuda_dir):
+ compute_capabilities = set([
+     (5, 2), # Titan X
+     (6, 1), # GeForce 1000-series
 -    (9, 0), # Hopper
 +    (8, 6), # Ampere (RTX 30-series); CUDA 11.6 cannot compile sm_90.
+ ])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Annotated
@@ -350,24 +351,87 @@ def build_runtime_image(
     from af3_binder_filter.backends import (
         BackendError,
         build_runtime_image_command,
-        prepare_runtime_build_contexts,
+        verify_runtime_source_bundle,
     )
     from af3_binder_filter.config import ConfigError
+    from af3_binder_filter.runtime_sources import (
+        RuntimeSourceLockError,
+        apply_source_lock_to_config,
+        load_runtime_source_lock,
+        prepare_locked_runtime_source_bundle,
+    )
 
     try:
         config, _resolved = _compose_cli_config(config_path, overrides=override)
+        dockerfile = Path(config.runtime.dockerfile).expanduser().resolve()
+        source_lock_path = Path(config.runtime.source_lock).expanduser()
+        if not source_lock_path.is_absolute():
+            source_lock_path = dockerfile.parents[2] / source_lock_path
+        source_lock = load_runtime_source_lock(source_lock_path)
+        apply_source_lock_to_config(config, source_lock)
+        context_root = (
+            Path(config.project.work_dir).expanduser().resolve()
+            / "runtime-build"
+            / f"locked-{source_lock.sha256[:16]}"
+        )
         if dry_run:
-            command = build_runtime_image_command(config)
-            console.print(" ".join(command))
+            if context_root.is_dir():
+                bundle = verify_runtime_source_bundle(context_root)
+                if bundle.manifest.get("source_lock_sha256") != source_lock.sha256:
+                    raise BackendError(f"cached runtime source lock mismatch: {context_root}")
+                console.print(
+                    shlex.join(build_runtime_image_command(config, source_bundle=context_root))
+                )
+            else:
+                console.print(
+                    shlex.join(
+                        [
+                            "uv",
+                            "run",
+                            "python",
+                            "scripts/runtime_sources.py",
+                            "--lock",
+                            str(source_lock.path),
+                            "prepare",
+                            "--output",
+                            str(context_root),
+                        ]
+                    )
+                )
+                console.print(
+                    shlex.join(
+                        [
+                            "uv",
+                            "run",
+                            "python",
+                            "scripts/build_runtime_image.py",
+                            "--config",
+                            str(config_path),
+                            "--source-bundle",
+                            str(context_root),
+                        ]
+                    )
+                )
             return
-        context_root = prepare_runtime_build_contexts(config)
-        command = build_runtime_image_command(config, context_root=context_root)
+        if context_root.is_dir():
+            bundle = verify_runtime_source_bundle(context_root)
+            if bundle.manifest.get("source_lock_sha256") != source_lock.sha256:
+                raise BackendError(f"cached runtime source lock mismatch: {context_root}")
+        else:
+            prepare_locked_runtime_source_bundle(source_lock, context_root)
+        command = build_runtime_image_command(config, source_bundle=context_root)
         completed = subprocess.run(command, check=False)
         if completed.returncode != 0:
             raise BackendError(
                 f"runtime image build failed with return code {completed.returncode}"
             )
-    except (BackendError, ConfigError, OSError, subprocess.SubprocessError) as exc:
+    except (
+        BackendError,
+        ConfigError,
+        OSError,
+        RuntimeSourceLockError,
+        subprocess.SubprocessError,
+    ) as exc:
         _fail(str(exc))
     console.print(f"Built unified runtime image: {config.backend.image}")
 

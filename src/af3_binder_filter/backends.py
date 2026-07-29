@@ -547,6 +547,7 @@ _RUNTIME_IGNORED_NAMES = (
     "search_database",
     "examples",
     "tests",
+    "test_data",
     "docs",
     "benchmarks",
     "assets",
@@ -907,8 +908,10 @@ def _runtime_recipe_sha256(dockerfile: Path) -> str:
     repository_root = dockerfile.parents[2]
     recipe_paths = (
         dockerfile,
+        dockerfile.parent / "Dockerfile.assemble",
         dockerfile.parent / "entrypoint.sh",
         dockerfile.parent / "esm_if_batch.py",
+        dockerfile.parent / "validate_runtime.sh",
         dockerfile.parent / "openfold-cuda-11.6.patch",
         dockerfile.parent / "sources.lock.yaml",
         dockerfile.parent / "patches" / "esm-openfold2-state-dict.patch",
@@ -932,9 +935,13 @@ def build_runtime_image_command(
     source_bundle: Path | None = None,
     build_cache_dir: Path | None = None,
     buildx_builder: str | None = None,
+    target: str | None = None,
+    push: bool = False,
 ) -> list[str]:
     """Build from local sources, staged contexts, or a verified source bundle."""
 
+    if push and not buildx_builder:
+        raise BackendError("pushing a runtime target requires an explicit Buildx builder")
     dockerfile = Path(config.runtime.dockerfile).expanduser().resolve()
     if context_root is not None and source_bundle is not None:
         raise BackendError("context_root and source_bundle are mutually exclusive")
@@ -978,14 +985,41 @@ def build_runtime_image_command(
         _update_hash_field(lock_hash, path.name)
         _update_hash_field(lock_hash, path.read_bytes())
     recipe_sha256 = _runtime_recipe_sha256(dockerfile)
-    source_lock_sha256 = (
-        str(verified_bundle.manifest.get("source_lock_sha256", "unavailable"))
-        if verified_bundle is not None
-        else "unavailable"
+    from af3_binder_filter.runtime_sources import (
+        RuntimeSourceLockError,
+        load_runtime_source_lock,
     )
+
+    source_lock_path = Path(config.runtime.source_lock).expanduser()
+    if not source_lock_path.is_absolute():
+        source_lock_path = dockerfile.parents[2] / source_lock_path
+    try:
+        source_lock = load_runtime_source_lock(source_lock_path)
+    except RuntimeSourceLockError as exc:
+        raise BackendError(str(exc)) from exc
+    declared_source_lock = (
+        verified_bundle.manifest.get("source_lock_sha256") if verified_bundle is not None else None
+    )
+    if declared_source_lock is not None and declared_source_lock != source_lock.sha256:
+        raise BackendError(
+            "runtime source bundle lock mismatch: "
+            f"expected {source_lock.sha256}, found {declared_source_lock}"
+        )
+    source_lock_sha256 = source_lock.sha256 if declared_source_lock is not None else "unavailable"
+    uv_component_sha256 = (
+        source_lock.component_sha256("uv") if declared_source_lock is not None else "unavailable"
+    )
+    conda_component_sha256 = (
+        source_lock.component_sha256("conda") if declared_source_lock is not None else "unavailable"
+    )
+    uv_artifact = source_lock.artifacts["uv"]
+    miniforge_artifact = source_lock.artifacts["miniforge"]
+    hmmer_artifact = source_lock.artifacts["hmmer"]
     command = [config.backend.docker_bin, "build", "--progress", "plain"]
     if buildx_builder:
-        command.extend(["--builder", buildx_builder, "--load"])
+        command.extend(["--builder", buildx_builder, "--push" if push else "--load"])
+    if target:
+        command.extend(["--target", target])
     if config.runtime.build_add_host:
         command.extend(["--add-host", config.runtime.build_add_host])
     if config.runtime.build_proxy:
@@ -1004,6 +1038,22 @@ def build_runtime_image_command(
         command.extend(["--cache-to", f"type=local,dest={cache_root},mode=max"])
     command.extend(
         [
+            "--build-arg",
+            f"UBUNTU_SNAPSHOT={source_lock.build['ubuntu_snapshot']}",
+            "--build-arg",
+            f"CUDA_BASE={source_lock.build['cuda_base']}",
+            "--build-arg",
+            f"UV_VERSION={uv_artifact['version']}",
+            "--build-arg",
+            f"UV_SHA256={uv_artifact['sha256']}",
+            "--build-arg",
+            f"MINIFORGE_VERSION={miniforge_artifact['version']}",
+            "--build-arg",
+            f"MINIFORGE_SHA256={miniforge_artifact['sha256']}",
+            "--build-arg",
+            f"HMMER_VERSION={hmmer_artifact['version']}",
+            "--build-arg",
+            f"HMMER_SHA256={hmmer_artifact['sha256']}",
             "--build-arg",
             f"AF3_COMMIT={config.runtime.af3_source_commit}",
             "--build-arg",
@@ -1032,6 +1082,10 @@ def build_runtime_image_command(
             f"RUNTIME_RECIPE_SHA256={recipe_sha256}",
             "--build-arg",
             f"RUNTIME_SOURCE_LOCK_SHA256={source_lock_sha256}",
+            "--build-arg",
+            f"UV_COMPONENT_SHA256={uv_component_sha256}",
+            "--build-arg",
+            f"CONDA_COMPONENT_SHA256={conda_component_sha256}",
             "--build-arg",
             "RUNTIME_SOURCE_BUNDLE_SHA256="
             + (verified_bundle.bundle_sha256 if verified_bundle else "unavailable"),

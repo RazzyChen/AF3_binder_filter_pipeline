@@ -30,6 +30,16 @@ def _parser() -> argparse.ArgumentParser:
         "--builder",
         help="Buildx builder name for this build",
     )
+    parser.add_argument(
+        "--target",
+        choices=("runtime-base", "uv-component", "conda-component", "fold-runtime"),
+        help="optional staged Docker target; default builds the final runtime",
+    )
+    parser.add_argument(
+        "--push",
+        action="store_true",
+        help="push the selected target instead of loading it into the local engine",
+    )
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -51,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
             source_bundle=args.source_bundle,
             build_cache_dir=args.cache_dir,
             buildx_builder=args.builder,
+            target=args.target,
+            push=args.push,
         )
         print(shlex.join(command))
         if args.dry_run:

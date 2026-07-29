@@ -218,44 +218,98 @@ def test_build_command_accepts_candidate_tag_and_persistent_cache(
     ]
 
 
+def test_build_command_can_push_one_content_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = _runtime_sources(tmp_path)
+    config = _runtime_config(tmp_path, sources)
+    config.backend.image = "ghcr.io/razzychen/aerith-uv-component:test"
+    monkeypatch.setattr("af3_binder_filter.backends._git_head", lambda _source: "deadbeef")
+    bundle = create_runtime_source_bundle(config, tmp_path / "data" / "bundle")
+
+    command = build_runtime_image_command(
+        config,
+        source_bundle=bundle.root,
+        buildx_builder="remote-aerith",
+        target="uv-component",
+        push=True,
+    )
+
+    assert "--push" in command
+    assert "--load" not in command
+    assert command[command.index("--target") + 1] == "uv-component"
+    assert command[command.index("--tag") + 1].endswith("aerith-uv-component:test")
+
+
+def test_build_command_rejects_push_without_buildx_builder(tmp_path: Path) -> None:
+    sources = _runtime_sources(tmp_path)
+    config = _runtime_config(tmp_path, sources)
+
+    with pytest.raises(BackendError, match="requires an explicit Buildx builder"):
+        build_runtime_image_command(config, push=True)
+
+
 def test_runtime_dockerfile_keeps_build_tools_out_of_the_final_image() -> None:
     dockerfile = (Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile").read_text()
-    builder, runtime = dockerfile.split("FROM ${CUDA_BASE} AS runtime", maxsplit=1)
+    build_base, tool_builder = dockerfile.split("FROM build-base AS tool-builder", maxsplit=1)
+    tool_builder, uv_builder = tool_builder.split("FROM build-base AS uv-builder", maxsplit=1)
+    uv_builder, uv_component = uv_builder.split("FROM scratch AS uv-component", maxsplit=1)
+    uv_component, conda_builder = uv_component.split("FROM build-base AS conda-builder", maxsplit=1)
+    conda_builder, conda_component = conda_builder.split(
+        "FROM scratch AS conda-component", maxsplit=1
+    )
+    conda_component, runtime_base = conda_component.split(
+        "FROM ${CUDA_BASE} AS runtime-base", maxsplit=1
+    )
+    runtime_base, final = runtime_base.split("FROM runtime-base AS fold-runtime", maxsplit=1)
 
-    assert dockerfile.splitlines()[1].startswith("ARG CUDA_BASE=")
-    assert "FROM ${CUDA_BASE} AS builder" in builder
-    assert "cuda-nvcc-12-6" in builder
-    assert "LAYERNORM_TYPE=fast_layernorm" in builder
-    assert "from opendde.model.layer_norm import layer_norm" in builder
-    for path in (
-        "/hmmer",
-        "/opt/conda",
-        "/opt/uv-python",
-        "/opt/envs",
-        "/opt/apps",
-        "/opt/mmseqs",
-        "/opt/foldseek",
-        "/opt/aerith",
-    ):
-        assert f"COPY --from=builder {path} {path}" in runtime
-
-    assert "cuda-nvcc-12-6" not in runtime
-    assert "rm -f /opt/conda/envs/esm/bin/nvcc" in runtime
-    assert "test ! -e /usr/local/cuda-12.6/bin/nvcc" in runtime
-    assert "find /opt/envs/af3 -type f -name ptxas" in runtime
-    assert 'ENTRYPOINT ["/usr/local/bin/fold-runtime"]' in runtime
-    assert 'org.aerith.runtime.source.dirty="${RUNTIME_SOURCE_DIRTY}"' in runtime
+    assert "FROM ${CUDA_BASE} AS build-base" in build_base
+    assert "cuda-nvcc-12-6" in build_base
+    assert "MMSEQS_RELEASE" not in build_base
+    assert "COPY --from=af3-src /docker/jackhmmer_seq_limit.patch" in tool_builder
+    assert "MMSEQS_RELEASE" in tool_builder
+    assert "COPY --from=af3-src" in uv_builder
+    assert "COPY --from=opendde-src" in uv_builder
+    assert "protenix-src" not in uv_builder
+    assert "COPY --from=uv-builder /opt/envs /opt/envs" in uv_component
+    assert "COPY --from=protenix-src" in conda_builder
+    assert "COPY --from=esm-src" in conda_builder
+    assert "COPY --from=openfold-src" in conda_builder
+    assert "opendde-src" not in conda_builder
+    assert "COPY --from=conda-builder /opt/conda /opt/conda" in conda_component
+    assert "cuda-nvcc-12-6" not in runtime_base
+    assert "COPY --from=tool-builder /opt/mmseqs /opt/mmseqs" in runtime_base
+    assert "COPY --from=uv-component /opt/envs /opt/envs" in final
+    assert "COPY --from=conda-component /opt/conda /opt/conda" in final
+    assert "rm -f /opt/conda/envs/esm/bin/nvcc" in final
+    assert 'ENTRYPOINT ["/usr/local/bin/fold-runtime"]' in runtime_base
+    assert 'org.aerith.runtime.source-lock.sha256="${RUNTIME_SOURCE_LOCK_SHA256}"' in final
+    assert 'org.aerith.runtime.source.openfold.sha256="${OPENFOLD_SOURCE_SHA256}"' in final
     assert "ARG UBUNTU_SNAPSHOT=20260723T000000Z" in dockerfile
     assert dockerfile.count("snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}") == 4
     assert 'Acquire::Check-Valid-Until "false"' in dockerfile
-    assert dockerfile.count("id=aerith-apt-cache") == 3
-    assert dockerfile.count("id=aerith-apt-lists") == 3
+    assert dockerfile.count("id=aerith-apt-cache") == 2
+    assert dockerfile.count("id=aerith-apt-lists") == 2
     assert dockerfile.count("rm -f /etc/apt/apt.conf.d/docker-clean") == 2
     assert "rm -rf /var/lib/apt/lists/*" not in dockerfile
-    assert 'org.aerith.runtime.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"' in runtime
+    assert 'org.aerith.runtime.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"' in final
 
     entrypoint = (Path(__file__).parents[1] / "docker" / "runtime" / "entrypoint.sh").read_text()
     assert "fast_layer_norm_cuda_v2 is not None" in entrypoint
+    validator = (
+        Path(__file__).parents[1] / "docker" / "runtime" / "validate_runtime.sh"
+    ).read_text()
+    assert "test ! -e /usr/local/cuda-12.6/bin/nvcc" in validator
+    assert "fast_layer_norm_cuda_v2 is not None" in validator
+
+    assembly = (
+        Path(__file__).parents[1] / "docker" / "runtime" / "Dockerfile.assemble"
+    ).read_text()
+    assert "FROM ${UV_COMPONENT_IMAGE} AS uv-component" in assembly
+    assert "FROM ${CONDA_COMPONENT_IMAGE} AS conda-component" in assembly
+    assert "FROM ${RUNTIME_BASE_IMAGE} AS fold-runtime" in assembly
+    assert "COPY --from=uv-component /opt/envs /opt/envs" in assembly
+    assert "COPY --from=conda-component /opt/conda /opt/conda" in assembly
 
 
 _EXPORTER = runpy.run_path(str(Path(__file__).parents[1] / "scripts" / "export_runtime_image.py"))
@@ -294,6 +348,8 @@ def test_runtime_image_verifier_accepts_clean_release_provenance() -> None:
         "org.aerith.runtime.recipe.sha256": "2" * 64,
         "org.aerith.runtime.source-lock.sha256": "3" * 64,
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.component.uv.sha256": "a" * 64,
+        "org.aerith.runtime.component.conda.sha256": "b" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -331,6 +387,8 @@ def test_production_export_rejects_missing_ubuntu_snapshot(tmp_path: Path) -> No
         "org.aerith.runtime.recipe.sha256": "2" * 64,
         "org.aerith.runtime.source-lock.sha256": "3" * 64,
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.component.uv.sha256": "a" * 64,
+        "org.aerith.runtime.component.conda.sha256": "b" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -357,6 +415,8 @@ def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> No
         "org.aerith.runtime.recipe.sha256": "2" * 64,
         "org.aerith.runtime.source-lock.sha256": "3" * 64,
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.component.uv.sha256": "a" * 64,
+        "org.aerith.runtime.component.conda.sha256": "b" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -387,6 +447,8 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(
         "org.aerith.runtime.recipe.sha256": "2" * 64,
         "org.aerith.runtime.source-lock.sha256": "3" * 64,
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
+        "org.aerith.runtime.component.uv.sha256": "a" * 64,
+        "org.aerith.runtime.component.conda.sha256": "b" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
