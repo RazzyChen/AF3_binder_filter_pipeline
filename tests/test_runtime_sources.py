@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 
+from af3_binder_filter.backends import runtime_recipe_sha256
 from af3_binder_filter.config import AerithConfig
 from af3_binder_filter.runtime_sources import (
     RuntimeSourceLockError,
@@ -35,6 +37,57 @@ def test_repository_runtime_source_lock_is_complete_and_component_addressed() ->
     assert {lock.sources[name].component for name in ("protenix", "esm", "openfold")} == {"conda"}
     assert re.fullmatch(r"[0-9a-f]{64}", lock.sha256)
     assert lock.component_sha256("uv") != lock.component_sha256("conda")
+    changed_artifacts = {name: dict(artifact) for name, artifact in lock.artifacts.items()}
+    changed_artifacts["uv"]["version"] = "changed"
+    changed = replace(lock, artifacts=changed_artifacts)
+    assert changed.component_sha256("uv") != lock.component_sha256("uv")
+    assert changed.component_sha256("conda") != lock.component_sha256("conda")
+    assert lock.shared_sha256() not in {
+        lock.component_sha256("uv"),
+        lock.component_sha256("conda"),
+    }
+    uv_build = lock.build_sha256(
+        "uv",
+        recipe_sha256="1" * 64,
+        dependency_lock_sha256="2" * 64,
+    )
+    conda_build = lock.build_sha256(
+        "conda",
+        recipe_sha256="1" * 64,
+        dependency_lock_sha256="2" * 64,
+    )
+    assert uv_build != conda_build
+    assert re.fullmatch(r"[0-9a-f]{64}", lock.build_sha256("shared", recipe_sha256="1" * 64))
+
+
+def test_component_recipe_hashes_ignore_unrelated_stages(tmp_path: Path) -> None:
+    dockerfile = tmp_path / "docker" / "runtime" / "Dockerfile"
+    dockerfile.parent.mkdir(parents=True)
+    dockerfile.write_text(
+        "# syntax=docker/dockerfile:1\n"
+        "ARG BASE=example\n"
+        "FROM base AS build-base\nRUN echo shared\n"
+        "FROM build-base AS uv-builder\nRUN echo uv\n"
+        "FROM scratch AS uv-component\nCOPY --from=uv-builder /uv /uv\n"
+        "FROM build-base AS conda-builder\nRUN echo conda\n"
+        "FROM scratch AS conda-component\nCOPY --from=conda-builder /conda /conda\n"
+        "FROM build-base AS tool-builder\nRUN echo tools\n"
+        "FROM base AS runtime-base\nRUN echo runtime\n"
+    )
+    feature_builder = tmp_path / "docker" / "feature-builder"
+    feature_builder.mkdir()
+    for name in ("build_local_features.py", "mmseqs_wrapper.py", "convert_af3_templates.py"):
+        (feature_builder / name).write_text(name)
+    for name in ("entrypoint.sh", "esm_if_batch.py", "validate_runtime.sh"):
+        (dockerfile.parent / name).write_text(name)
+    (dockerfile.parent / "Dockerfile.assemble").write_text("FROM base\n")
+
+    uv_before = runtime_recipe_sha256(dockerfile, "uv")
+    conda_before = runtime_recipe_sha256(dockerfile, "conda")
+    dockerfile.write_text(dockerfile.read_text().replace("echo uv", "echo uv changed"))
+
+    assert runtime_recipe_sha256(dockerfile, "uv") != uv_before
+    assert runtime_recipe_sha256(dockerfile, "conda") == conda_before
 
 
 def test_runtime_source_lock_rejects_patch_checksum_drift(tmp_path: Path) -> None:

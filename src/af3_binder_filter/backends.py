@@ -904,26 +904,95 @@ def prepare_runtime_build_contexts(config: AerithConfig) -> Path:
     return create_runtime_source_bundle(config, target_root).root
 
 
-def _runtime_recipe_sha256(dockerfile: Path) -> str:
+def _runtime_dockerfile_recipe(dockerfile: Path, component: str) -> bytes:
+    """Return only the Dockerfile stages that can affect one published component."""
+
+    stage_dependencies = {
+        "uv": ("build-base", "uv-builder", "uv-component"),
+        "conda": ("build-base", "conda-builder", "conda-component"),
+        "shared": ("build-base", "tool-builder", "runtime-base"),
+    }
+    if component not in stage_dependencies:
+        raise BackendError(f"unsupported runtime recipe component: {component}")
+    text = dockerfile.read_text()
+    matches = list(re.finditer(r"(?m)^FROM\s+.+?\s+AS\s+([A-Za-z0-9_.-]+)\s*$", text))
+    if not matches:
+        raise BackendError(f"runtime Dockerfile has no named stages: {dockerfile}")
+    stages: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        stages[match.group(1)] = text[match.start() : end]
+    missing = [name for name in stage_dependencies[component] if name not in stages]
+    if missing:
+        missing_names = ", ".join(missing)
+        raise BackendError(f"runtime Dockerfile is missing {component} stages: {missing_names}")
+    prelude = text[: matches[0].start()]
+    selected = [prelude, *(stages[name] for name in stage_dependencies[component])]
+    return "".join(selected).encode()
+
+
+def runtime_recipe_sha256(dockerfile: Path, component: str | None = None) -> str:
+    """Hash the complete runtime recipe or one independently built component."""
+
     repository_root = dockerfile.parents[2]
-    recipe_paths = (
-        dockerfile,
-        dockerfile.parent / "Dockerfile.assemble",
-        dockerfile.parent / "entrypoint.sh",
-        dockerfile.parent / "esm_if_batch.py",
-        dockerfile.parent / "validate_runtime.sh",
-        dockerfile.parent / "openfold-cuda-11.6.patch",
-        dockerfile.parent / "sources.lock.yaml",
-        dockerfile.parent / "patches" / "esm-openfold2-state-dict.patch",
-        repository_root / "docker" / "feature-builder" / "build_local_features.py",
-        repository_root / "docker" / "feature-builder" / "mmseqs_wrapper.py",
-        repository_root / "docker" / "feature-builder" / "convert_af3_templates.py",
-    )
-    digest = hashlib.sha256(b"aerith-runtime-recipe-v1\0")
+    common_paths = {
+        "uv": (
+            repository_root / "docker" / "feature-builder" / "build_local_features.py",
+            repository_root / "docker" / "feature-builder" / "convert_af3_templates.py",
+        ),
+        "conda": (),
+        "shared": (
+            dockerfile.parent / "entrypoint.sh",
+            dockerfile.parent / "esm_if_batch.py",
+            dockerfile.parent / "validate_runtime.sh",
+            repository_root / "docker" / "feature-builder" / "build_local_features.py",
+            repository_root / "docker" / "feature-builder" / "mmseqs_wrapper.py",
+            repository_root / "docker" / "feature-builder" / "convert_af3_templates.py",
+        ),
+    }
+    if component is None:
+        recipe_paths = (
+            dockerfile,
+            dockerfile.parent / "Dockerfile.assemble",
+            *common_paths["shared"],
+        )
+        digest = hashlib.sha256(b"aerith-runtime-recipe-v2\0")
+    else:
+        if component not in common_paths:
+            raise BackendError(f"unsupported runtime recipe component: {component}")
+        recipe_paths = common_paths[component]
+        digest = hashlib.sha256(b"aerith-runtime-component-recipe-v1\0")
+        _update_hash_field(digest, component)
+        _update_hash_field(digest, _runtime_dockerfile_recipe(dockerfile, component))
     for path in recipe_paths:
         if not path.is_file():
             raise BackendError(f"runtime build recipe file does not exist: {path}")
         _update_hash_field(digest, path.relative_to(repository_root).as_posix())
+        _update_hash_field(digest, path.read_bytes())
+    return digest.hexdigest()
+
+
+def runtime_dependency_lock_sha256(lock_root: Path, component: str | None = None) -> str:
+    """Hash all or one component's Python dependency lock files."""
+
+    component_prefixes = {
+        None: ("",),
+        "uv": ("opendde.",),
+        "conda": ("protenix.", "esm."),
+    }
+    if component not in component_prefixes:
+        raise BackendError(f"unsupported dependency-lock component: {component}")
+    prefixes = component_prefixes[component]
+    lock_paths = [
+        path
+        for path in sorted(lock_root.glob("*.lock"))
+        if any(path.name.startswith(prefix) for prefix in prefixes)
+    ]
+    if not lock_paths:
+        raise BackendError(f"runtime lock files do not exist for {component or 'all'}: {lock_root}")
+    digest = hashlib.sha256(b"aerith-runtime-locks-v1\0")
+    for path in lock_paths:
+        _update_hash_field(digest, path.name)
         _update_hash_field(digest, path.read_bytes())
     return digest.hexdigest()
 
@@ -937,6 +1006,8 @@ def build_runtime_image_command(
     buildx_builder: str | None = None,
     target: str | None = None,
     push: bool = False,
+    registry_cache_ref: str | None = None,
+    build_platform: str | None = None,
 ) -> list[str]:
     """Build from local sources, staged contexts, or a verified source bundle."""
 
@@ -977,14 +1048,8 @@ def build_runtime_image_command(
             f"free; found {free_gib:.1f} GiB"
         )
     lock_root = dockerfile.parent / "locks"
-    lock_paths = sorted(lock_root.glob("*.lock"))
-    if not lock_paths:
-        raise BackendError(f"runtime lock files do not exist: {lock_root}")
-    lock_hash = hashlib.sha256(b"aerith-runtime-locks-v1\0")
-    for path in lock_paths:
-        _update_hash_field(lock_hash, path.name)
-        _update_hash_field(lock_hash, path.read_bytes())
-    recipe_sha256 = _runtime_recipe_sha256(dockerfile)
+    lock_sha256 = runtime_dependency_lock_sha256(lock_root)
+    recipe_sha256 = runtime_recipe_sha256(dockerfile)
     from af3_binder_filter.runtime_sources import (
         RuntimeSourceLockError,
         load_runtime_source_lock,
@@ -1006,18 +1071,27 @@ def build_runtime_image_command(
             f"expected {source_lock.sha256}, found {declared_source_lock}"
         )
     source_lock_sha256 = source_lock.sha256 if declared_source_lock is not None else "unavailable"
-    uv_component_sha256 = (
-        source_lock.component_sha256("uv") if declared_source_lock is not None else "unavailable"
-    )
-    conda_component_sha256 = (
-        source_lock.component_sha256("conda") if declared_source_lock is not None else "unavailable"
-    )
+    uv_component_sha256 = "unavailable"
+    conda_component_sha256 = "unavailable"
+    if declared_source_lock is not None:
+        uv_component_sha256 = source_lock.build_sha256(
+            "uv",
+            recipe_sha256=runtime_recipe_sha256(dockerfile, "uv"),
+            dependency_lock_sha256=runtime_dependency_lock_sha256(lock_root, "uv"),
+        )
+        conda_component_sha256 = source_lock.build_sha256(
+            "conda",
+            recipe_sha256=runtime_recipe_sha256(dockerfile, "conda"),
+            dependency_lock_sha256=runtime_dependency_lock_sha256(lock_root, "conda"),
+        )
     uv_artifact = source_lock.artifacts["uv"]
     miniforge_artifact = source_lock.artifacts["miniforge"]
     hmmer_artifact = source_lock.artifacts["hmmer"]
     command = [config.backend.docker_bin, "build", "--progress", "plain"]
     if buildx_builder:
         command.extend(["--builder", buildx_builder, "--push" if push else "--load"])
+    if build_platform:
+        command.extend(["--platform", build_platform])
     if target:
         command.extend(["--target", target])
     if config.runtime.build_add_host:
@@ -1036,6 +1110,9 @@ def build_runtime_image_command(
         if (cache_root / "index.json").is_file():
             command.extend(["--cache-from", f"type=local,src={cache_root}"])
         command.extend(["--cache-to", f"type=local,dest={cache_root},mode=max"])
+    if registry_cache_ref:
+        command.extend(["--cache-from", f"type=registry,ref={registry_cache_ref}"])
+        command.extend(["--cache-to", f"type=registry,ref={registry_cache_ref},mode=max"])
     command.extend(
         [
             "--build-arg",
@@ -1077,7 +1154,7 @@ def build_runtime_image_command(
             "--build-arg",
             f"FOLDSEEK_SHA256={config.runtime.foldseek_archive_sha256}",
             "--build-arg",
-            f"RUNTIME_LOCK_SHA256={lock_hash.hexdigest()}",
+            f"RUNTIME_LOCK_SHA256={lock_sha256}",
             "--build-arg",
             f"RUNTIME_RECIPE_SHA256={recipe_sha256}",
             "--build-arg",

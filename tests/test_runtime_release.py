@@ -233,12 +233,17 @@ def test_build_command_can_push_one_content_component(
         buildx_builder="remote-aerith",
         target="uv-component",
         push=True,
+        registry_cache_ref="ghcr.io/razzychen/aerith-build-cache:uv",
+        build_platform="linux/amd64",
     )
 
     assert "--push" in command
     assert "--load" not in command
     assert command[command.index("--target") + 1] == "uv-component"
+    assert command[command.index("--platform") + 1] == "linux/amd64"
     assert command[command.index("--tag") + 1].endswith("aerith-uv-component:test")
+    assert "type=registry,ref=ghcr.io/razzychen/aerith-build-cache:uv" in command
+    assert "type=registry,ref=ghcr.io/razzychen/aerith-build-cache:uv,mode=max" in command
 
 
 def test_build_command_rejects_push_without_buildx_builder(tmp_path: Path) -> None:
@@ -350,6 +355,8 @@ def test_runtime_image_verifier_accepts_clean_release_provenance() -> None:
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
+        "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -389,6 +396,8 @@ def test_production_export_rejects_missing_ubuntu_snapshot(tmp_path: Path) -> No
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
+        "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -417,6 +426,8 @@ def test_production_export_rejects_dirty_source_provenance(tmp_path: Path) -> No
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
+        "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,
@@ -449,6 +460,8 @@ def test_export_writes_checksum_metadata_and_content_derived_tag(
         "org.aerith.runtime.source-bundle.sha256": "4" * 64,
         "org.aerith.runtime.component.uv.sha256": "a" * 64,
         "org.aerith.runtime.component.conda.sha256": "b" * 64,
+        "org.aerith.runtime.component.uv.image-digest": "sha256:" + "c" * 64,
+        "org.aerith.runtime.component.conda.image-digest": "sha256:" + "d" * 64,
         "org.aerith.runtime.source.af3.sha256": "5" * 64,
         "org.aerith.runtime.source.protenix.sha256": "6" * 64,
         "org.aerith.runtime.source.opendde.sha256": "7" * 64,

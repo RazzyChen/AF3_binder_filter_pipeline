@@ -40,6 +40,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="push the selected target instead of loading it into the local engine",
     )
+    parser.add_argument(
+        "--registry-cache",
+        help="OCI registry cache reference for remote BuildKit cache import/export",
+    )
+    parser.add_argument(
+        "--platform",
+        help="explicit OCI target platform, for example linux/amd64",
+    )
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -63,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
             buildx_builder=args.builder,
             target=args.target,
             push=args.push,
+            registry_cache_ref=args.registry_cache,
+            build_platform=args.platform,
         )
         print(shlex.join(command))
         if args.dry_run:

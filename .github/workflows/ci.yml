@@ -40,6 +40,8 @@ jobs:
         run: uv run ruff format --check .
       - name: Audit Python dependencies
         run: uv run deptry --config pyproject.toml .
+      - name: Validate immutable runtime sources
+        run: uv run python scripts/runtime_sources.py validate
       - name: Compile all tracked Python files
         run: git ls-files -z -- '*.py' | xargs -0 uv run python -m py_compile
 

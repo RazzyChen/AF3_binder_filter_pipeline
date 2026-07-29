@@ -79,8 +79,68 @@ class RuntimeSourceLock:
             "artifacts": {
                 name: dict(artifact)
                 for name, artifact in self.artifacts.items()
-                if artifact.get("component") in {component, "shared"}
+                if artifact.get("component") == component
+                # Both environment builders invoke uv. The conda component
+                # therefore depends on the uv binary even though it does not
+                # contain the AF3/OpenDDE uv environments.
+                or (component == "conda" and name == "uv")
             },
+        }
+        encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def shared_sha256(self) -> str:
+        """Return the source identity of the common runtime tool layer."""
+
+        identity = {
+            "schema": self.schema,
+            "build": dict(self.build),
+            # tool-builder consumes AF3's jackhmmer patch.
+            "af3": _source_identity(self.sources["af3"]),
+            "artifacts": {
+                name: dict(artifact)
+                for name, artifact in self.artifacts.items()
+                if artifact.get("component") == "shared"
+            },
+        }
+        encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def build_sha256(
+        self,
+        component: str,
+        *,
+        recipe_sha256: str,
+        dependency_lock_sha256: str | None = None,
+    ) -> str:
+        """Combine source, recipe, and dependency identities for an OCI target."""
+
+        if component in RUNTIME_COMPONENTS:
+            source_sha256 = self.component_sha256(component)
+            if dependency_lock_sha256 is None:
+                raise RuntimeSourceLockError(
+                    f"{component} build identity requires a dependency lock digest"
+                )
+        elif component == "shared":
+            source_sha256 = self.shared_sha256()
+            if dependency_lock_sha256 is not None:
+                raise RuntimeSourceLockError(
+                    "shared build identity must not include Python dependency locks"
+                )
+        else:
+            raise RuntimeSourceLockError(f"unsupported runtime build component: {component}")
+        for label, digest in (
+            ("recipe_sha256", recipe_sha256),
+            ("dependency_lock_sha256", dependency_lock_sha256),
+        ):
+            if digest is not None and _SHA256_PATTERN.fullmatch(digest) is None:
+                raise RuntimeSourceLockError(f"{label} must be a SHA-256 digest")
+        identity = {
+            "schema": "aerith.runtime-component-build.v1",
+            "component": component,
+            "source_sha256": source_sha256,
+            "recipe_sha256": recipe_sha256,
+            "dependency_lock_sha256": dependency_lock_sha256,
         }
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()

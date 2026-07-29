@@ -1,29 +1,34 @@
-name: GPU golden smoke
+name: GPU golden smoke and promotion
 
 on:
-  schedule:
-    # Sunday 02:00 Asia/Shanghai. It is intentionally not PR- or push-triggered.
-    - cron: "0 18 * * 6"
   workflow_dispatch:
     inputs:
       image:
-        description: "Runtime image tag or immutable image ID; blank uses ci-candidate"
+        description: "Private GHCR candidate; blank uses aerith-fold-runtime:candidate"
         required: false
         type: string
       suites:
-        description: "Which secondary-backend golden suites to run serially"
+        description: "Secondary-backend golden suites to run serially"
         required: true
         default: both
         type: choice
         options: [both, opendde, protenix]
+      promote:
+        description: "Promote this exact digest after smoke and environment approval"
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: "Required only when promote=true, for example 2026.07.29"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  packages: write
 
-# Shared with docker-build.yml. No external fork event can ever acquire this
-# self-hosted GPU runner because this workflow has no pull_request trigger.
 concurrency:
-  group: aerith-runtime-host
+  group: aerith-gpu-smoke-host
   cancel-in-progress: false
 
 jobs:
@@ -31,11 +36,15 @@ jobs:
     name: Golden AF3 cross-validation smoke
     runs-on: [self-hosted, linux, x64, aerith-gpu]
     timeout-minutes: 720
+    outputs:
+      digest: ${{ steps.smoke.outputs.digest }}
+      repository: ${{ steps.smoke.outputs.repository }}
     env:
       AERITH_GPU_SMOKE_CONFIG: ${{ vars.AERITH_GPU_SMOKE_CONFIG }}
       AERITH_GPU_SMOKE_CONTRACT: ${{ vars.AERITH_GPU_SMOKE_CONTRACT }}
       AERITH_GPU_SMOKE_ROOT: ${{ vars.AERITH_GPU_SMOKE_ROOT }}
       AERITH_GPU_SMOKE_LOCK: ${{ vars.AERITH_GPU_SMOKE_LOCK }}
+      UV_PYTHON: "3.12"
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -51,51 +60,107 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Install locked smoke environment
-        env:
-          UV_PYTHON: "3.12"
         run: uv sync --locked --dev
+      - name: Log in to private GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Exclusively run Docker doctor and golden suites
+        id: smoke
         shell: bash
+        env:
+          REQUESTED_IMAGE: ${{ inputs.image }}
+          SELECTED_SUITES: ${{ inputs.suites }}
+          PROMOTE: ${{ inputs.promote }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           : "${AERITH_GPU_SMOKE_CONFIG:?Set repository variable AERITH_GPU_SMOKE_CONFIG}"
           : "${AERITH_GPU_SMOKE_CONTRACT:?Set repository variable AERITH_GPU_SMOKE_CONTRACT}"
           : "${AERITH_GPU_SMOKE_ROOT:?Set repository variable AERITH_GPU_SMOKE_ROOT}"
-          test -f "$AERITH_GPU_SMOKE_CONFIG"
-          test -f "$AERITH_GPU_SMOKE_CONTRACT"
+          if [[ "$PROMOTE" == true && ! "$RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            echo "promote=true requires a safe release_tag" >&2
+            exit 2
+          fi
           mkdir -p "$AERITH_GPU_SMOKE_ROOT"
           lock="${AERITH_GPU_SMOKE_LOCK:-${AERITH_GPU_SMOKE_ROOT}/gpu-smoke.lock}"
           mkdir -p "$(dirname "$lock")"
           exec 9>"$lock"
           flock -n 9
-          busy="$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits | awk 'NF')"
+          busy="$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits | sed -n "/[^[:space:]]/p")"
           if [[ -n "$busy" ]]; then
-            echo "GPU smoke requires an otherwise idle host; compute PIDs are active: $busy" >&2
+            echo "GPU smoke requires an idle host; active compute PIDs: $busy" >&2
             exit 75
           fi
-          requested_image="${{ inputs.image }}"
-          requested_image="${requested_image:-aerith/fold-runtime:ci-candidate}"
-          image_id="$(docker image inspect --format '{{.Id}}' "$requested_image")"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          requested_image="${REQUESTED_IMAGE:-ghcr.io/$owner/aerith-fold-runtime:candidate}"
+          digest="$(docker buildx imagetools inspect "$requested_image" \
+            | sed -n "s/^Digest:[[:space:]]*//p" | head -n 1)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "could not resolve registry digest for $requested_image" >&2
+            exit 2
+          fi
+          repository="${requested_image%@*}"
+          reference_tail="${repository##*/}"
+          if [[ "$reference_tail" == *:* ]]; then
+            repository="${repository%:*}"
+          fi
+          docker pull "$repository@$digest"
+          image_id="$(docker image inspect --format "{{.Id}}" "$repository@$digest")"
           uv run python scripts/verify_runtime_image.py --image "$image_id"
-          selected_suites="${{ inputs.suites }}"
-          selected_suites="${selected_suites:-both}"
-          case "$selected_suites" in
-            both) backends=(opendde protenix) ;;
-            opendde|protenix) backends=("$selected_suites") ;;
-            *) echo "unsupported suite selection: $selected_suites" >&2; exit 2 ;;
-          esac
           docker run --rm --gpus all --network none "$image_id" doctor
+
+          case "$SELECTED_SUITES" in
+            both) backends=(opendde protenix) ;;
+            opendde|protenix) backends=("$SELECTED_SUITES") ;;
+            *) echo "unsupported suite selection: $SELECTED_SUITES" >&2; exit 2 ;;
+          esac
           export AERITH_GPU_SMOKE_IMAGE="$image_id"
           export AERITH_GPU_SMOKE_AERITH_COMMAND="aerith"
           for backend in "${backends[@]}"; do
             export AERITH_GPU_SMOKE_BACKEND="$backend"
             uv run pytest -q -m integration tests/test_gpu_smoke_contract.py
           done
-          docker image tag "$image_id" aerith/fold-runtime:ci-last-known-good
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
             echo "### GPU golden smoke passed"
             echo
-            echo "- immutable image ID: \`$image_id\`"
+            echo "- immutable candidate: \`$repository@$digest\`"
             echo "- suites: \`${backends[*]}\`"
             echo "- contract: \`$AERITH_GPU_SMOKE_CONTRACT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Approve and publish release tag
+    needs: golden
+    if: inputs.promote
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: runtime-release
+    steps:
+      - name: Log in to private GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Promote the exact tested manifest
+        shell: bash
+        env:
+          SOURCE_REPOSITORY: ${{ needs.golden.outputs.repository }}
+          SOURCE_DIGEST: ${{ needs.golden.outputs.digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          target="ghcr.io/$owner/aerith-fold-runtime"
+          docker buildx imagetools create \
+            --tag "$target:$RELEASE_TAG" \
+            --tag "$target:stable" \
+            "$SOURCE_REPOSITORY@$SOURCE_DIGEST"
+          {
+            echo "### Runtime promoted"
+            echo
+            echo "- release: \`$target:$RELEASE_TAG\`"
+            echo "- stable: \`$target:stable\`"
+            echo "- immutable source: \`$SOURCE_REPOSITORY@$SOURCE_DIGEST\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -11,8 +11,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from af3_binder_filter.backends import (  # noqa: E402
+    runtime_dependency_lock_sha256,
+    runtime_recipe_sha256,
+)
 from af3_binder_filter.runtime_sources import (  # noqa: E402
-    RUNTIME_COMPONENTS,
+    RuntimeSourceLock,
     RuntimeSourceLockError,
     load_runtime_source_lock,
     prepare_locked_runtime_source_bundle,
@@ -36,13 +40,46 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _metadata(lock: object) -> dict[str, object]:
+def _metadata(lock: RuntimeSourceLock) -> dict[str, object]:
+    dockerfile = ROOT / "docker" / "runtime" / "Dockerfile"
+    lock_root = dockerfile.parent / "locks"
+    recipe_sha256 = runtime_recipe_sha256(dockerfile)
+    uv_recipe_sha256 = runtime_recipe_sha256(dockerfile, "uv")
+    conda_recipe_sha256 = runtime_recipe_sha256(dockerfile, "conda")
+    shared_recipe_sha256 = runtime_recipe_sha256(dockerfile, "shared")
+    dependency_lock_sha256 = runtime_dependency_lock_sha256(lock_root)
+    uv_dependency_sha256 = runtime_dependency_lock_sha256(lock_root, "uv")
+    conda_dependency_sha256 = runtime_dependency_lock_sha256(lock_root, "conda")
     return {
         "schema": lock.schema,
         "lock_path": str(lock.path),
         "lock_sha256": lock.sha256,
         "uv_sha256": lock.component_sha256("uv"),
         "conda_sha256": lock.component_sha256("conda"),
+        "shared_sha256": lock.shared_sha256(),
+        "recipe_sha256": recipe_sha256,
+        "uv_recipe_sha256": uv_recipe_sha256,
+        "conda_recipe_sha256": conda_recipe_sha256,
+        "shared_recipe_sha256": shared_recipe_sha256,
+        "dependency_lock_sha256": dependency_lock_sha256,
+        "build": dict(lock.build),
+        "artifacts": {name: dict(artifact) for name, artifact in lock.artifacts.items()},
+        "uv_dependency_lock_sha256": uv_dependency_sha256,
+        "conda_dependency_lock_sha256": conda_dependency_sha256,
+        "uv_build_sha256": lock.build_sha256(
+            "uv",
+            recipe_sha256=uv_recipe_sha256,
+            dependency_lock_sha256=uv_dependency_sha256,
+        ),
+        "conda_build_sha256": lock.build_sha256(
+            "conda",
+            recipe_sha256=conda_recipe_sha256,
+            dependency_lock_sha256=conda_dependency_sha256,
+        ),
+        "runtime_base_build_sha256": lock.build_sha256(
+            "shared",
+            recipe_sha256=shared_recipe_sha256,
+        ),
         "sources": {
             name: {
                 "component": source.component,
@@ -72,11 +109,21 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
         if args.command == "metadata" and args.github_output is not None:
-            lines = [f"source_lock_sha256={lock.sha256}"]
-            lines.extend(
-                f"{component}_sha256={lock.component_sha256(component)}"
-                for component in RUNTIME_COMPONENTS
+            output_names = (
+                "lock_sha256",
+                "recipe_sha256",
+                "uv_recipe_sha256",
+                "conda_recipe_sha256",
+                "shared_recipe_sha256",
+                "dependency_lock_sha256",
+                "uv_sha256",
+                "conda_sha256",
+                "shared_sha256",
+                "uv_build_sha256",
+                "conda_build_sha256",
+                "runtime_base_build_sha256",
             )
+            lines = [f"{name}={payload[name]}" for name in output_names]
             with args.github_output.open("a", encoding="utf-8") as handle:
                 handle.write("\n".join(lines) + "\n")
     except (OSError, RuntimeSourceLockError) as exc:

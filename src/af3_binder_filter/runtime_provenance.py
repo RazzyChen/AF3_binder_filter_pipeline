@@ -29,6 +29,10 @@ PROVENANCE_SHA256_LABELS = (
 )
 RUNTIME_SOURCE_DIRTY_LABEL = "org.aerith.runtime.source.dirty"
 UBUNTU_SNAPSHOT_LABEL = "org.aerith.runtime.ubuntu-snapshot"
+COMPONENT_IMAGE_DIGEST_LABELS = (
+    "org.aerith.runtime.component.uv.image-digest",
+    "org.aerith.runtime.component.conda.image-digest",
+)
 
 
 def parse_image_inspect(stdout: str, image: str) -> dict[str, Any]:
@@ -79,6 +83,16 @@ def validate_release_provenance(inspect: dict[str, Any]) -> None:
     if invalid:
         raise RuntimeImageError(
             "image is missing release-grade SHA256 provenance labels: " + ", ".join(invalid)
+        )
+    invalid_component_digests = [
+        name
+        for name in COMPONENT_IMAGE_DIGEST_LABELS
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", str(labels.get(name, ""))) is None
+    ]
+    if invalid_component_digests:
+        raise RuntimeImageError(
+            "image is missing immutable component image digests: "
+            + ", ".join(invalid_component_digests)
         )
     if re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", str(labels.get(UBUNTU_SNAPSHOT_LABEL, ""))) is None:
         raise RuntimeImageError("image is missing a valid Ubuntu snapshot provenance label")

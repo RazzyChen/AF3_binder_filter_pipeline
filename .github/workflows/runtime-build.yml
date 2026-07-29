@@ -1,0 +1,253 @@
+name: Manual runtime build
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Environment group to rebuild; missing dependencies are built automatically"
+        required: true
+        default: all
+        type: choice
+        options: [all, uv, conda]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: aerith-remote-runtime-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build components and candidate with remote BuildKit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      AERITH_BUILDKIT_ENDPOINT: ${{ secrets.AERITH_BUILDKIT_ENDPOINT }}
+      AERITH_BUILDKIT_CA: ${{ secrets.AERITH_BUILDKIT_CA }}
+      AERITH_BUILDKIT_CERT: ${{ secrets.AERITH_BUILDKIT_CERT }}
+      AERITH_BUILDKIT_KEY: ${{ secrets.AERITH_BUILDKIT_KEY }}
+      UV_PYTHON: "3.12"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          check-latest: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install locked build environment
+        run: uv sync --locked --dev
+      - name: Log in to private GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Configure mutually authenticated remote BuildKit
+        id: buildx
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AERITH_BUILDKIT_ENDPOINT:?Set secret AERITH_BUILDKIT_ENDPOINT}"
+          : "${AERITH_BUILDKIT_CA:?Set secret AERITH_BUILDKIT_CA}"
+          : "${AERITH_BUILDKIT_CERT:?Set secret AERITH_BUILDKIT_CERT}"
+          : "${AERITH_BUILDKIT_KEY:?Set secret AERITH_BUILDKIT_KEY}"
+          tls="$RUNNER_TEMP/aerith-buildkit-tls"
+          install -d -m 0700 "$tls"
+          umask 077
+          printf "%s" "$AERITH_BUILDKIT_CA" > "$tls/ca.pem"
+          printf "%s" "$AERITH_BUILDKIT_CERT" > "$tls/cert.pem"
+          printf "%s" "$AERITH_BUILDKIT_KEY" > "$tls/key.pem"
+          builder="aerith-remote-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx create \
+            --name "$builder" \
+            --driver remote \
+            --driver-opt "cacert=$tls/ca.pem,cert=$tls/cert.pem,key=$tls/key.pem" \
+            --use "$AERITH_BUILDKIT_ENDPOINT"
+          docker buildx inspect "$builder" --bootstrap
+          echo "name=$builder" >> "$GITHUB_OUTPUT"
+      - name: Prepare verified GitHub source bundle and identities
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/runtime-sources"
+          uv run python scripts/runtime_sources.py metadata \
+            --github-output "$GITHUB_OUTPUT" > "$RUNNER_TEMP/runtime-metadata.json"
+          uv run python scripts/runtime_sources.py prepare --output "$bundle" \
+            > "$RUNNER_TEMP/runtime-bundle.json"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "bundle_sha256=$(jq -r .bundle_sha256 "$RUNNER_TEMP/runtime-bundle.json")" \
+            >> "$GITHUB_OUTPUT"
+      - name: Build missing or requested components in parallel
+        id: components
+        shell: bash
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          SOURCE_BUNDLE: ${{ steps.metadata.outputs.bundle }}
+          UV_BUILD_SHA256: ${{ steps.metadata.outputs.uv_build_sha256 }}
+          CONDA_BUILD_SHA256: ${{ steps.metadata.outputs.conda_build_sha256 }}
+          BASE_BUILD_SHA256: ${{ steps.metadata.outputs.runtime_base_build_sha256 }}
+          BUILD_SCOPE: ${{ inputs.scope }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          registry="ghcr.io/$owner"
+          uv_image="$registry/aerith-runtime-uv:build-$UV_BUILD_SHA256"
+          conda_image="$registry/aerith-runtime-conda:build-$CONDA_BUILD_SHA256"
+          base_image="$registry/aerith-runtime-base:build-$BASE_BUILD_SHA256"
+          cache_repo="$registry/aerith-runtime-build-cache"
+
+          image_exists() {
+            docker buildx imagetools inspect "$1" >/dev/null 2>&1
+          }
+          build_uv=false
+          build_conda=false
+          build_base=false
+          case "$BUILD_SCOPE" in
+            all) build_uv=true; build_conda=true; build_base=true ;;
+            uv) build_uv=true ;;
+            conda) build_conda=true ;;
+            *) echo "unsupported scope: $BUILD_SCOPE" >&2; exit 2 ;;
+          esac
+          image_exists "$uv_image" || build_uv=true
+          image_exists "$conda_image" || build_conda=true
+          image_exists "$base_image" || build_base=true
+
+          pids=()
+          names=()
+          start_build() {
+            local name="$1" target="$2" image="$3" cache="$4"
+            (
+              set -o pipefail
+              uv run python scripts/build_runtime_image.py \
+                --config src/af3_binder_filter/conf/config.yaml \
+                --source-bundle "$SOURCE_BUNDLE" \
+                --image "$image" \
+                --builder "$BUILDER_NAME" \
+                --target "$target" \
+                --platform linux/amd64 \
+                --registry-cache "$cache_repo:$cache" \
+                --push 2>&1 | sed -u "s/^/[$name] /"
+            ) &
+            pids+=("$!")
+            names+=("$name")
+          }
+          [[ "$build_uv" == true ]] && start_build uv uv-component "$uv_image" uv
+          [[ "$build_conda" == true ]] \
+            && start_build conda conda-component "$conda_image" conda
+          [[ "$build_base" == true ]] \
+            && start_build base runtime-base "$base_image" base
+
+          failed=0
+          for index in "${!pids[@]}"; do
+            if ! wait "${pids[$index]}"; then
+              echo "component build failed: ${names[$index]}" >&2
+              failed=1
+            fi
+          done
+          (( failed == 0 ))
+          echo "uv_image=$uv_image" >> "$GITHUB_OUTPUT"
+          echo "conda_image=$conda_image" >> "$GITHUB_OUTPUT"
+          echo "base_image=$base_image" >> "$GITHUB_OUTPUT"
+      - name: Assemble digest-pinned candidate
+        id: candidate
+        shell: bash
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          UV_IMAGE: ${{ steps.components.outputs.uv_image }}
+          CONDA_IMAGE: ${{ steps.components.outputs.conda_image }}
+          BASE_IMAGE: ${{ steps.components.outputs.base_image }}
+          SOURCE_BUNDLE: ${{ steps.metadata.outputs.bundle }}
+          SOURCE_LOCK_SHA256: ${{ steps.metadata.outputs.lock_sha256 }}
+          RECIPE_SHA256: ${{ steps.metadata.outputs.recipe_sha256 }}
+          DEPENDENCY_LOCK_SHA256: ${{ steps.metadata.outputs.dependency_lock_sha256 }}
+          UV_BUILD_SHA256: ${{ steps.metadata.outputs.uv_build_sha256 }}
+          CONDA_BUILD_SHA256: ${{ steps.metadata.outputs.conda_build_sha256 }}
+          BUNDLE_SHA256: ${{ steps.metadata.outputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/runtime-metadata.json"
+          manifest="$SOURCE_BUNDLE/manifest.json"
+          image_digest() {
+            local digest
+            digest="$(docker buildx imagetools inspect "$1" \
+              | sed -n "s/^Digest:[[:space:]]*//p" | head -n 1)"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "could not resolve registry digest for $1" >&2
+              return 2
+            fi
+            printf "%s" "$digest"
+          }
+          uv_digest="$(image_digest "$UV_IMAGE")"
+          conda_digest="$(image_digest "$CONDA_IMAGE")"
+          base_digest="$(image_digest "$BASE_IMAGE")"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          candidate="ghcr.io/$owner/aerith-fold-runtime:candidate-${GITHUB_RUN_ID}"
+          candidate_alias="ghcr.io/$owner/aerith-fold-runtime:candidate"
+
+          docker buildx build \
+            --builder "$BUILDER_NAME" \
+            --progress plain \
+            --platform linux/amd64 \
+            --file docker/runtime/Dockerfile.assemble \
+            --build-arg "RUNTIME_BASE_IMAGE=$BASE_IMAGE@$base_digest" \
+            --build-arg "UV_COMPONENT_IMAGE=$UV_IMAGE@$uv_digest" \
+            --build-arg "CONDA_COMPONENT_IMAGE=$CONDA_IMAGE@$conda_digest" \
+            --build-arg "UBUNTU_SNAPSHOT=$(jq -r .build.ubuntu_snapshot "$metadata")" \
+            --build-arg "MMSEQS_VERSION=$(jq -r .artifacts.mmseqs.version "$metadata")" \
+            --build-arg "MMSEQS_SHA256=$(jq -r .artifacts.mmseqs.sha256 "$metadata")" \
+            --build-arg "FOLDSEEK_VERSION=$(jq -r .artifacts.foldseek.version "$metadata")" \
+            --build-arg "FOLDSEEK_SHA256=$(jq -r .artifacts.foldseek.sha256 "$metadata")" \
+            --build-arg "AF3_COMMIT=$(jq -r .sources.af3.commit "$metadata")" \
+            --build-arg "PROTENIX_COMMIT=$(jq -r .sources.protenix.commit "$metadata")" \
+            --build-arg "OPENDDE_COMMIT=$(jq -r .sources.opendde.commit "$metadata")" \
+            --build-arg "ESM_COMMIT=$(jq -r .sources.esm.commit "$metadata")" \
+            --build-arg "OPENFOLD_COMMIT=$(jq -r .sources.openfold.commit "$metadata")" \
+            --build-arg "RUNTIME_LOCK_SHA256=$DEPENDENCY_LOCK_SHA256" \
+            --build-arg "RUNTIME_RECIPE_SHA256=$RECIPE_SHA256" \
+            --build-arg "RUNTIME_SOURCE_LOCK_SHA256=$SOURCE_LOCK_SHA256" \
+            --build-arg "RUNTIME_SOURCE_BUNDLE_SHA256=$BUNDLE_SHA256" \
+            --build-arg RUNTIME_SOURCE_DIRTY=false \
+            --build-arg "UV_COMPONENT_SHA256=$UV_BUILD_SHA256" \
+            --build-arg "CONDA_COMPONENT_SHA256=$CONDA_BUILD_SHA256" \
+            --build-arg "UV_COMPONENT_IMAGE_DIGEST=$uv_digest" \
+            --build-arg "CONDA_COMPONENT_IMAGE_DIGEST=$conda_digest" \
+            --build-arg "AF3_SOURCE_SHA256=$(jq -r .contexts.\"af3-src\".sha256 "$manifest")" \
+            --build-arg "PROTENIX_SOURCE_SHA256=$(jq -r .contexts.\"protenix-src\".sha256 "$manifest")" \
+            --build-arg "OPENDDE_SOURCE_SHA256=$(jq -r .contexts.\"opendde-src\".sha256 "$manifest")" \
+            --build-arg "ESM_SOURCE_SHA256=$(jq -r .contexts.\"esm-src\".sha256 "$manifest")" \
+            --build-arg "OPENFOLD_SOURCE_SHA256=$(jq -r .contexts.\"openfold-src\".sha256 "$manifest")" \
+            --cache-from "type=registry,ref=ghcr.io/$owner/aerith-runtime-build-cache:assembly" \
+            --cache-to "type=registry,ref=ghcr.io/$owner/aerith-runtime-build-cache:assembly,mode=max" \
+            --tag "$candidate" \
+            --tag "$candidate_alias" \
+            --push .
+          candidate_digest="$(image_digest "$candidate")"
+          echo "image=$candidate" >> "$GITHUB_OUTPUT"
+          echo "digest=$candidate_digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Runtime candidate"
+            echo
+            echo "- candidate: \`$candidate@$candidate_digest\`"
+            echo "- uv component: \`$UV_IMAGE@$uv_digest\`"
+            echo "- conda component: \`$CONDA_IMAGE@$conda_digest\`"
+            echo "- runtime base: \`$BASE_IMAGE@$base_digest\`"
+            echo "- source bundle: \`$BUNDLE_SHA256\`"
+            echo
+            echo "The candidate is not promoted until the manual GPU smoke succeeds."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove ephemeral remote builder
+        if: always()
+        shell: bash
+        run: |
+          builder="${{ steps.buildx.outputs.name }}"
+          if [[ -n "$builder" ]]; then
+            docker buildx rm "$builder" || true
+          fi
